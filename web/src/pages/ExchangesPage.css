@@ -1,0 +1,71 @@
+.exchanges-page__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: var(--space-4);
+}
+
+.exchanges-page__card {
+  position: relative;
+  overflow: hidden;
+}
+
+.exchanges-page__card--connected {
+  border-color: rgba(0, 230, 118, 0.2);
+}
+
+.exchanges-page__card--connected::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--color-profit), transparent);
+}
+
+.exchanges-page__card--disconnected {
+  opacity: 0.7;
+}
+
+.exchanges-page__card-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.exchanges-page__card-header > div:first-of-type {
+  flex: 1;
+}
+
+.exchanges-page__icon {
+  font-size: var(--text-2xl);
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+}
+
+.exchanges-page__name {
+  font-size: var(--text-md);
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.exchanges-page__details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.exchanges-page__detail {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}

@@ -1,0 +1,64 @@
+version: "3.8"
+
+services:
+  # PostgreSQL + TimescaleDB — optimized for trading workloads
+  db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: aitrading-db
+    environment:
+      POSTGRES_USER: aitrading
+      POSTGRES_PASSWORD: aitrading_pass
+      POSTGRES_DB: aitrading
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Mount custom PostgreSQL config for trading optimization
+      - ./server/config/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
+    restart: unless-stopped
+    # Memory/CPU limits for consistent performance
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aitrading"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching and pub/sub (optional, for horizontal scaling)
+  redis:
+    image: redis:7-alpine
+    container_name: aitrading-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    # Optimize Redis for low-latency trading cache
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --appendonly no
+      --tcp-backlog 511
+      --timeout 0
+      --tcp-keepalive 300
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+    driver: local

@@ -1,0 +1,20 @@
+.pnl {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pnl--sm { font-size: var(--text-xs); }
+.pnl--md { font-size: var(--text-sm); }
+.pnl--lg { font-size: var(--text-lg); }
+
+.pnl--profit { color: var(--color-profit); }
+.pnl--loss { color: var(--color-loss); }
+.pnl--neutral { color: var(--text-tertiary); }
+
+.pnl__arrow {
+  font-size: 0.65em;
+  line-height: 1;
+}

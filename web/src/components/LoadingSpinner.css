@@ -1,0 +1,17 @@
+.loading-spinner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-8);
+}
+
+.loading-spinner__svg {
+  animation: spin 1s linear infinite;
+}
+
+.loading-spinner__text {
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}

@@ -1,0 +1,25 @@
+# Build artifacts
+/target
+/server/target
+
+# Environment files with secrets
+.env
+server/.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Flutter
+mobile/.dart_tool/
+mobile/.packages
+mobile/build/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+
+# Database volumes
+pgdata/
