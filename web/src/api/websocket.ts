@@ -73,7 +73,17 @@ export type WsMessage =
 
 type WsListener = (msg: WsMessage) => void;
 
-const WS_BASE = import.meta.env.VITE_WS_URL || 'ws://localhost:8081';
+function getDefaultWsUrl(): string {
+  if (import.meta.env.VITE_WS_URL) {
+    const url = import.meta.env.VITE_WS_URL;
+    return url.endsWith('/ws') ? url : `${url}/ws`;
+  }
+  if (typeof window !== 'undefined') {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${protocol}//${window.location.host}/ws`;
+  }
+  return 'ws://localhost:8081/ws';
+}
 
 export class TradingWebSocket {
   private ws: WebSocket | null = null;
@@ -86,7 +96,7 @@ export class TradingWebSocket {
   private _url: string;
 
   constructor() {
-    this._url = `${WS_BASE}/ws`;
+    this._url = getDefaultWsUrl();
   }
 
   get isConnected(): boolean {

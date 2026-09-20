@@ -6,7 +6,9 @@ import {
   Bot,
   ScrollText,
   FlaskConical,
+  Flame,
   Globe,
+  Key,
   Settings,
   LogOut,
   UserCheck,
@@ -19,9 +21,11 @@ const NAV_ITEMS = [
   { to: '/charts',     icon: CandlestickChart,label: 'Charts' },
   { to: '/positions',  icon: Briefcase,       label: 'Positions' },
   { to: '/signals',    icon: Bot,             label: 'AI Signals' },
+  { to: '/meme-radar', icon: Flame,           label: 'Meme Radar' },
   { to: '/trades',     icon: ScrollText,      label: 'Trade History' },
   { to: '/backtest',   icon: FlaskConical,    label: 'Backtesting' },
   { to: '/exchanges',  icon: Globe,           label: 'Exchanges' },
+  { to: '/api-keys',   icon: Key,             label: 'API Keys' },
   { to: '/settings',   icon: Settings,        label: 'Settings' },
 ];
 

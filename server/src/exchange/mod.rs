@@ -1,6 +1,8 @@
 pub mod mexc;
 pub mod alpaca;
 pub mod ic_markets;
+pub mod binance;
+pub mod bybit;
 pub mod manager;
 
 use anyhow::Result;

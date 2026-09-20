@@ -7,13 +7,15 @@ use tracing::{debug, error, info};
 use crate::config::GrokConfig;
 
 /// Client for the Grok (xAI) API.
+use std::sync::RwLock;
+
 /// Uses OpenAI-compatible endpoint at https://api.x.ai/v1
 pub struct GrokClient {
     http_client: Client,
-    api_key: String,
-    base_url: String,
-    pub model_primary: String,
-    pub model_fast: String,
+    api_key: RwLock<String>,
+    base_url: RwLock<String>,
+    pub model_primary: RwLock<String>,
+    pub model_fast: RwLock<String>,
     /// Track total tokens used for cost monitoring.
     total_tokens_used: AtomicU64,
 }
@@ -115,12 +117,49 @@ impl GrokClient {
     pub fn new(config: &GrokConfig) -> Self {
         Self {
             http_client: Client::new(),
-            api_key: config.api_key.clone(),
-            base_url: config.base_url.clone(),
-            model_primary: config.model_primary.clone(),
-            model_fast: config.model_fast.clone(),
+            api_key: RwLock::new(config.api_key.clone()),
+            base_url: RwLock::new(config.base_url.clone()),
+            model_primary: RwLock::new(config.model_primary.clone()),
+            model_fast: RwLock::new(config.model_fast.clone()),
             total_tokens_used: AtomicU64::new(0),
         }
+    }
+
+    pub fn set_api_key(&self, key: String) {
+        if let Ok(mut lock) = self.api_key.write() {
+            *lock = key;
+        }
+    }
+
+    pub fn get_api_key(&self) -> String {
+        self.api_key.read().map(|k| k.clone()).unwrap_or_default()
+    }
+
+    pub fn set_models(&self, primary: String, fast: String) {
+        if let Ok(mut p) = self.model_primary.write() {
+            *p = primary;
+        }
+        if let Ok(mut f) = self.model_fast.write() {
+            *f = fast;
+        }
+    }
+
+    pub fn set_base_url(&self, url: String) {
+        if let Ok(mut b) = self.base_url.write() {
+            *b = url;
+        }
+    }
+
+    pub fn get_model_primary(&self) -> String {
+        self.model_primary.read().map(|m| m.clone()).unwrap_or_else(|_| "grok-4.6".to_string())
+    }
+
+    pub fn get_model_fast(&self) -> String {
+        self.model_fast.read().map(|m| m.clone()).unwrap_or_else(|_| "grok-4.5".to_string())
+    }
+
+    pub fn get_base_url(&self) -> String {
+        self.base_url.read().map(|b| b.clone()).unwrap_or_else(|_| "https://api.x.ai/v1".to_string())
     }
 
     /// Send a chat completion request to Grok API.
@@ -132,13 +171,13 @@ impl GrokClient {
         max_tokens: Option<u32>,
     ) -> Result<GrokResponse> {
         let model = if use_primary_model {
-            &self.model_primary
+            self.get_model_primary()
         } else {
-            &self.model_fast
+            self.get_model_fast()
         };
 
         let request = ChatCompletionRequest {
-            model: model.clone(),
+            model,
             messages,
             temperature,
             max_tokens,
@@ -158,13 +197,13 @@ impl GrokClient {
         max_tokens: Option<u32>,
     ) -> Result<GrokResponse> {
         let model = if use_primary_model {
-            &self.model_primary
+            self.get_model_primary()
         } else {
-            &self.model_fast
+            self.get_model_fast()
         };
 
         let request = ChatCompletionRequest {
-            model: model.clone(),
+            model,
             messages,
             temperature,
             max_tokens,
@@ -185,13 +224,13 @@ impl GrokClient {
         use_primary_model: bool,
     ) -> Result<GrokResponse> {
         let model = if use_primary_model {
-            &self.model_primary
+            self.get_model_primary()
         } else {
-            &self.model_fast
+            self.get_model_fast()
         };
 
         let request = ChatCompletionRequest {
-            model: model.clone(),
+            model,
             messages,
             temperature: Some(0.3),
             max_tokens: Some(4096),
@@ -204,14 +243,16 @@ impl GrokClient {
 
     /// Internal method to send the request and parse the response.
     async fn send_request(&self, request: ChatCompletionRequest) -> Result<GrokResponse> {
-        let url = format!("{}/chat/completions", self.base_url);
+        let base_url = self.get_base_url();
+        let api_key = self.get_api_key();
+        let url = format!("{}/chat/completions", base_url);
 
         debug!("Sending request to Grok API: model={}", request.model);
 
         let response = self
             .http_client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
             .json(&request)
             .send()
@@ -252,6 +293,50 @@ impl GrokClient {
             tokens_used,
             finish_reason: choice.finish_reason.unwrap_or_default(),
         })
+    }
+
+    /// Test Grok connection with either current key or an override key
+    pub async fn test_connection(&self, temp_key: Option<&str>) -> Result<String> {
+        let key = match temp_key {
+            Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+            _ => self.get_api_key(),
+        };
+
+        if key.is_empty() {
+            anyhow::bail!("API key is empty or not configured");
+        }
+
+        let base_url = self.base_url.read().map(|b| b.clone()).unwrap_or_else(|_| "https://api.x.ai/v1".to_string());
+        let model = self.get_model_fast();
+
+        let request = ChatCompletionRequest {
+            model,
+            messages: vec![ChatMessage {
+                role: "user".to_string(),
+                content: "ping".to_string(),
+            }],
+            temperature: Some(0.0),
+            max_tokens: Some(5),
+            response_format: None,
+            tools: None,
+        };
+
+        let response = self
+            .http_client
+            .post(format!("{base_url}/chat/completions"))
+            .header("Authorization", format!("Bearer {key}"))
+            .json(&request)
+            .send()
+            .await
+            .context("Failed to reach Grok API endpoint")?;
+
+        let status = response.status();
+        if status.is_success() {
+            Ok("Connection successful! Grok API verified.".to_string())
+        } else {
+            let error_body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Grok API error (HTTP {}): {}", status, error_body)
+        }
     }
 
     /// Get total tokens used across all API calls.

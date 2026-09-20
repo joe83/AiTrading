@@ -239,7 +239,7 @@ impl DataLoader {
             Timeframe::Min5 => "5m",
             Timeframe::Min15 => "15m",
             Timeframe::Min30 => "30m",
-            Timeframe::Hour1 => "1h",
+            Timeframe::Hour1 => "60m",
             Timeframe::Hour4 => "4h",
             Timeframe::Day1 => "1d",
             Timeframe::Week1 => "1W",

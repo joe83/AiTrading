@@ -2,7 +2,7 @@
 // REST API Client — Type-safe wrapper for all Rust server endpoints
 // ===========================================================================
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+const API_BASE = import.meta.env.VITE_API_URL ?? '';
 
 // ---------------------------------------------------------------------------
 // Types matching Rust server responses
@@ -82,6 +82,8 @@ export interface BacktestConfig {
   fee_rate: number;
   stop_loss_pct: number;
   take_profit_pct: number;
+  use_grok?: boolean;
+  max_ai_calls?: number;
 }
 
 export interface BacktestMetrics {
@@ -102,23 +104,34 @@ export interface BacktestResult {
   metrics: BacktestMetrics;
   trades: BacktestTrade[];
   equity_curve: number[];
+  use_grok?: boolean;
+  ai_calls_made?: number;
+  ai_cached_calls?: number;
+  grok_model_used?: string;
   completed_at: string;
 }
 
 export interface BacktestTrade {
   entry_time: string;
   exit_time: string;
+  symbol?: string;
   side: string;
   entry_price: number;
   exit_price: number;
   quantity: number;
   pnl: number;
   pnl_pct: number;
+  fees?: number;
+  holding_bars?: number;
+  reasoning?: string;
+  exit_reason?: string;
 }
 
 export interface ExchangeStatus {
   exchange: string;
+  id?: string;
   connected: boolean;
+  enabled?: boolean;
 }
 
 export interface SystemStatus {
@@ -129,6 +142,136 @@ export interface SystemStatus {
   grok_tokens_used: number;
   uptime_secs: number;
   exchanges: ExchangeStatus[];
+}
+
+export interface GrokKeyStatus {
+  is_set: boolean;
+  masked_key: string;
+  base_url: string;
+  model_primary: string;
+  model_fast: string;
+}
+
+export interface MexcKeyStatus {
+  is_set: boolean;
+  masked_api_key: string;
+  is_secret_set: boolean;
+  base_url: string;
+  enabled?: boolean;
+}
+
+export interface AlpacaKeyStatus {
+  is_set: boolean;
+  masked_api_key: string;
+  is_secret_set: boolean;
+  base_url: string;
+  enabled?: boolean;
+}
+
+export interface IcMarketsKeyStatus {
+  is_set: boolean;
+  masked_api_key: string;
+  account_id: string;
+  client_id: string;
+  is_client_secret_set: boolean;
+  base_url: string;
+  enabled?: boolean;
+}
+
+export interface BinanceKeyStatus {
+  is_set: boolean;
+  masked_api_key: string;
+  is_secret_set: boolean;
+  base_url: string;
+  enabled?: boolean;
+}
+
+export interface BybitKeyStatus {
+  is_set: boolean;
+  masked_api_key: string;
+  is_secret_set: boolean;
+  base_url: string;
+  enabled?: boolean;
+}
+
+export interface ApiKeysStatus {
+  grok: GrokKeyStatus;
+  mexc: MexcKeyStatus;
+  alpaca: AlpacaKeyStatus;
+  ic_markets: IcMarketsKeyStatus;
+  binance: BinanceKeyStatus;
+  bybit: BybitKeyStatus;
+}
+
+export interface UpdateApiKeysRequest {
+  grok_api_key?: string;
+  grok_base_url?: string;
+  grok_model_primary?: string;
+  grok_model_fast?: string;
+
+  mexc_api_key?: string;
+  mexc_secret_key?: string;
+  mexc_enabled?: boolean;
+
+  alpaca_api_key?: string;
+  alpaca_secret_key?: string;
+  alpaca_base_url?: string;
+  alpaca_enabled?: boolean;
+
+  ic_markets_api_key?: string;
+  ic_markets_account_id?: string;
+  ic_markets_client_id?: string;
+  ic_markets_client_secret?: string;
+  ic_markets_enabled?: boolean;
+
+  binance_api_key?: string;
+  binance_secret_key?: string;
+  binance_base_url?: string;
+  binance_enabled?: boolean;
+
+  bybit_api_key?: string;
+  bybit_secret_key?: string;
+  bybit_base_url?: string;
+  bybit_enabled?: boolean;
+}
+
+export interface TestApiKeyRequest {
+  service: 'grok' | 'mexc' | 'alpaca' | 'ic_markets' | 'binance' | 'bybit';
+  key?: string;
+  secret?: string;
+}
+
+export interface TestApiKeyResponse {
+  success: boolean;
+  message: string;
+}
+
+export interface MemeTokenRadarItem {
+  symbol: string;
+  name: string;
+  cashtag: string;
+  narrative: string;
+  viral_velocity: number;
+  sentiment_score: number;
+  sentiment_label: string;
+  catalysts: string[];
+  risk_level: 'low' | 'medium' | 'high' | 'extreme';
+  is_tradeable_on_mexc: boolean;
+  mexc_symbol: string;
+  current_price_usdt?: number | null;
+  price_change_24h_pct?: number | null;
+  volume_24h_usdt?: number | null;
+  high_24h?: number | null;
+  low_24h?: number | null;
+}
+
+export interface MemeRadarReport {
+  scanned_at: string;
+  total_tokens_scanned: number;
+  top_narrative_theme: string;
+  narrative_summary: string;
+  tokens: MemeTokenRadarItem[];
+  source: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -223,11 +366,16 @@ export const api = {
   getTradeHistory: () =>
     request<{ trades: Trade[] }>('/api/trades'),
 
-  // Backtesting
   runBacktest: (config: BacktestConfig) =>
     request<{ status: string; result?: BacktestResult }>('/api/backtest/run', {
       method: 'POST',
-      body: JSON.stringify(config),
+      body: JSON.stringify({
+        ...config,
+        exchange: 'mexc',
+        initial_balance: config.initial_capital,
+        maker_fee: config.fee_rate,
+        taker_fee: config.fee_rate,
+      }),
     }),
 
   getBacktestResults: () =>
@@ -239,6 +387,15 @@ export const api = {
   // Exchanges
   getExchangeStatus: () =>
     request<{ exchanges: ExchangeStatus[] }>('/api/exchanges/status'),
+
+  toggleExchange: (exchange: string, enabled?: boolean) =>
+    request<{ status: string; exchange: string; connected: boolean; enabled: boolean }>(
+      `/api/exchanges/${encodeURIComponent(exchange.toLowerCase())}/toggle`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ enabled }),
+      }
+    ),
 
   // Settings & Control
   getTradingMode: () =>
@@ -255,6 +412,31 @@ export const api = {
 
   resumeTrading: () =>
     request<{ status: string }>('/api/control/resume', { method: 'POST' }),
+
+  // API Keys & Integrations
+  getApiKeys: () =>
+    request<ApiKeysStatus>('/api/settings/api-keys'),
+
+  updateApiKeys: (data: UpdateApiKeysRequest) =>
+    request<{ success: boolean; message: string }>('/api/settings/api-keys', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  testApiKey: (data: TestApiKeyRequest) =>
+    request<TestApiKeyResponse>('/api/settings/api-keys/test', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // Meme / Social Sentiment Radar
+  getMemeRadar: () =>
+    request<{ report: MemeRadarReport }>('/api/radar/memes'),
+
+  scanMemeRadar: () =>
+    request<{ success: boolean; report: MemeRadarReport }>('/api/radar/memes/scan', {
+      method: 'POST',
+    }),
 
   // System
   healthCheck: () =>
@@ -277,3 +459,6 @@ export const api = {
   verifyToken: () =>
     request<{ valid: boolean; username: string; expires_at: number }>('/api/auth/verify'),
 };
+
+export const apiClient = api;
+

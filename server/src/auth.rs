@@ -104,7 +104,7 @@ pub async fn login(
     State(state): State<Arc<AppState>>,
     Json(req): Json<LoginRequest>,
 ) -> Response {
-    let config = &state.config;
+    let config = state.config.read().await;
 
     // Get credentials from config (loaded from .env)
     let expected_username = &config.auth.username;
@@ -158,7 +158,8 @@ pub async fn verify_token(
     State(state): State<Arc<AppState>>,
     req: Request,
 ) -> Response {
-    match extract_and_validate_token(&req, &state.config.jwt.secret) {
+    let jwt_secret = state.config.read().await.jwt.secret.clone();
+    match extract_and_validate_token(&req, &jwt_secret) {
         Ok(claims) => (
             StatusCode::OK,
             Json(serde_json::json!({
@@ -190,7 +191,8 @@ pub async fn auth_middleware(
     req: Request,
     next: Next,
 ) -> Response {
-    match extract_and_validate_token(&req, &state.config.jwt.secret) {
+    let jwt_secret = state.config.read().await.jwt.secret.clone();
+    match extract_and_validate_token(&req, &jwt_secret) {
         Ok(_claims) => {
             // Token is valid — proceed to the handler
             next.run(req).await

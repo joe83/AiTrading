@@ -57,7 +57,9 @@ pub struct SimPosition {
     pub stop_loss: Option<Decimal>,
     pub take_profit: Option<Decimal>,
     pub entry_bar: usize,
+    pub entry_time: chrono::DateTime<chrono::Utc>,
     pub signal_id: Uuid,
+    pub reasoning: String,
 }
 
 /// Result of attempting to execute a signal in the simulator.
@@ -116,7 +118,7 @@ impl SimulatedExchange {
 
         // Close triggered positions
         for (id, exit_price, reason) in to_close {
-            self.close_position(id, exit_price, &reason);
+            self.close_position(id, exit_price, candle.close_time, &reason);
         }
 
         // Update equity curve
@@ -152,7 +154,7 @@ impl SimulatedExchange {
             if !long_positions.is_empty() {
                 for id in long_positions {
                     let exit_price = self.apply_slippage(candle.close, OrderSide::Sell);
-                    self.close_position(id, exit_price, "sell_signal");
+                    self.close_position(id, exit_price, candle.close_time, "sell_signal");
                 }
                 return SimFillResult::Filled {
                     position_id: Uuid::nil(),
@@ -201,7 +203,9 @@ impl SimulatedExchange {
             stop_loss: signal.stop_loss,
             take_profit: signal.take_profit,
             entry_bar: self.current_bar,
+            entry_time: candle.open_time,
             signal_id: signal.id,
+            reasoning: signal.reasoning.clone(),
         };
 
         debug!(
@@ -221,7 +225,7 @@ impl SimulatedExchange {
     }
 
     /// Close a position at the given price.
-    fn close_position(&mut self, position_id: Uuid, exit_price: Decimal, reason: &str) {
+    fn close_position(&mut self, position_id: Uuid, exit_price: Decimal, exit_time: chrono::DateTime<chrono::Utc>, reason: &str) {
         if let Some(idx) = self.positions.iter().position(|p| p.id == position_id) {
             let pos = self.positions.remove(idx);
 
@@ -238,6 +242,16 @@ impl SimulatedExchange {
 
             let net_pnl = pnl - exit_fees;
 
+            let pnl_pct = if pos.entry_price > Decimal::ZERO {
+                let diff = match pos.side {
+                    OrderSide::Buy => exit_price - pos.entry_price,
+                    OrderSide::Sell => pos.entry_price - exit_price,
+                };
+                (diff / pos.entry_price).to_f64().unwrap_or(0.0) * 100.0
+            } else {
+                0.0
+            };
+
             // Return capital + PnL to balance
             let returned = pos.entry_price * pos.quantity + net_pnl;
             self.balance += returned;
@@ -250,9 +264,22 @@ impl SimulatedExchange {
             );
 
             self.closed_trades.push(CompletedTrade {
+                symbol: pos.symbol,
+                side: match pos.side {
+                    OrderSide::Buy => "BUY".to_string(),
+                    OrderSide::Sell => "SELL".to_string(),
+                },
+                entry_time: pos.entry_time,
+                exit_time,
+                entry_price: pos.entry_price,
+                exit_price,
+                quantity: pos.quantity,
                 pnl: net_pnl,
+                pnl_pct,
                 fees: exit_fees,
                 holding_bars,
+                reasoning: pos.reasoning,
+                exit_reason: reason.to_string(),
             });
         }
     }
@@ -262,7 +289,7 @@ impl SimulatedExchange {
         let ids: Vec<Uuid> = self.positions.iter().map(|p| p.id).collect();
         for id in ids {
             let exit_price = self.apply_slippage(candle.close, OrderSide::Sell);
-            self.close_position(id, exit_price, "backtest_end");
+            self.close_position(id, exit_price, candle.close_time, "backtest_end");
         }
     }
 

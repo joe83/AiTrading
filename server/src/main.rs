@@ -30,7 +30,7 @@ use crate::risk::RiskManager;
 
 /// Shared application state accessible by all components.
 pub struct AppState {
-    pub config: AppConfig,
+    pub config: RwLock<AppConfig>,
     pub ai_engine: AiEngine,
     pub risk_manager: Arc<RiskManager>,
     pub execution_engine: ExecutionEngine,
@@ -87,12 +87,16 @@ async fn main() -> Result<()> {
 
     // Initialize exchange manager
     let exchange_manager = Arc::new(ExchangeManager::new());
+    exchange_manager.init_enabled(&config).await;
+    execution_engine.set_exchange_manager(exchange_manager.clone()).await;
 
     // Register exchanges
     {
         use crate::exchange::mexc::MexcExchange;
         use crate::exchange::alpaca::AlpacaExchange;
         use crate::exchange::ic_markets::IcMarketsExchange;
+        use crate::exchange::binance::BinanceExchange;
+        use crate::exchange::bybit::BybitExchange;
 
         exchange_manager
             .register(ExchangeId::Mexc, Box::new(MexcExchange::new(config.mexc.clone())))
@@ -103,14 +107,21 @@ async fn main() -> Result<()> {
         exchange_manager
             .register(ExchangeId::IcMarkets, Box::new(IcMarketsExchange::new(config.ic_markets.clone())))
             .await;
+        exchange_manager
+            .register(ExchangeId::Binance, Box::new(BinanceExchange::new(config.binance.clone())))
+            .await;
+        exchange_manager
+            .register(ExchangeId::Bybit, Box::new(BybitExchange::new(config.bybit.clone())))
+            .await;
 
-        info!("✅ Exchange manager initialized (MEXC, Alpaca, IC Markets)");
+        info!("✅ Exchange manager initialized (MEXC, Alpaca, IC Markets, Binance, Bybit)");
 
         // Attempt to connect exchanges (non-fatal — missing keys are okay)
         let results = exchange_manager.connect_all().await;
         for (id, result) in &results {
+            let is_enabled = exchange_manager.is_enabled(id).await;
             match result {
-                Ok(()) => info!("   ✅ {} connected", id),
+                Ok(()) => info!("   ✅ {} connected (auto-trading: {})", id, if is_enabled { "ENABLED" } else { "DISABLED" }),
                 Err(e) => info!("   ⚠️  {} skipped ({})", id, e),
             }
         }
@@ -121,7 +132,7 @@ async fn main() -> Result<()> {
 
     // Build shared application state
     let state = Arc::new(AppState {
-        config: config.clone(),
+        config: RwLock::new(config.clone()),
         ai_engine,
         risk_manager: risk_manager.clone(),
         execution_engine,

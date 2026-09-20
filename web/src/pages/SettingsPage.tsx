@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
-import { Settings, Pause, Play, Shield, Cpu } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Settings, Pause, Play, Shield, Cpu, Key, ArrowRight } from 'lucide-react';
 import { StatusBadge } from '../components/StatusBadge';
 import { useTradingStore } from '../stores/tradingStore';
 import './SettingsPage.css';
@@ -28,6 +29,22 @@ export function SettingsPage() {
       <div className="page__header">
         <h1 className="page__title">Settings</h1>
         <p className="page__subtitle">Trading mode, risk parameters, and system controls</p>
+      </div>
+
+      {/* API Keys & Integrations Card */}
+      <div className="card settings-page__section" style={{ borderColor: 'rgba(168, 85, 247, 0.3)' }}>
+        <div className="settings-page__section-header">
+          <Key size={20} style={{ color: '#c084fc' }} />
+          <h2 className="card__title" style={{ marginBottom: 0 }}>API Keys & Provider Integrations</h2>
+        </div>
+        <p className="settings-page__desc">
+          Configure API credentials and endpoints for <strong>xAI Grok AI</strong>, <strong>MEXC Crypto</strong>, <strong>Alpaca Equities</strong>, and <strong>IC Markets Forex</strong>. Changes apply instantly without server restarts.
+        </p>
+        <div>
+          <Link to="/api-keys" className="btn btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+            <Key size={16} /> Manage API Keys <ArrowRight size={16} />
+          </Link>
+        </div>
       </div>
 
       {/* Trading Mode */}

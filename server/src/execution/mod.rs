@@ -18,6 +18,8 @@ pub struct ExecutionEngine {
     pending_signals: Arc<RwLock<Vec<TradingSignal>>>,
     /// Trade history log.
     trade_history: Arc<RwLock<Vec<TradeRecord>>>,
+    /// Optional exchange manager reference to verify exchange auto-trading enablement.
+    exchange_manager: Arc<RwLock<Option<Arc<crate::exchange::manager::ExchangeManager>>>>,
 }
 
 /// Record of an executed trade for performance tracking.
@@ -58,7 +60,13 @@ impl ExecutionEngine {
             trading_mode: Arc::new(RwLock::new(mode)),
             pending_signals: Arc::new(RwLock::new(Vec::new())),
             trade_history: Arc::new(RwLock::new(Vec::new())),
+            exchange_manager: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Set exchange manager reference to enforce exchange auto-trading toggles.
+    pub async fn set_exchange_manager(&self, em: Arc<crate::exchange::manager::ExchangeManager>) {
+        *self.exchange_manager.write().await = Some(em);
     }
 
     /// Process a trading signal — either execute immediately (auto) or queue for approval (manual).
@@ -100,6 +108,20 @@ impl ExecutionEngine {
 
         match mode {
             TradingMode::Auto => {
+                // Verify if the target exchange is enabled for auto bot transactions
+                if let Some(em) = self.exchange_manager.read().await.as_ref() {
+                    if !em.is_enabled(&signal.exchange).await {
+                        info!(
+                            "Skipping auto-trade for {} on {} — exchange is disabled for auto-bot transactions",
+                            signal.symbol, signal.exchange
+                        );
+                        return Ok(SignalProcessResult::Skipped(format!(
+                            "Exchange {} is disabled for auto-bot transactions",
+                            signal.exchange
+                        )));
+                    }
+                }
+
                 // Execute immediately
                 let result = self.execute_trade(signal, exchange).await?;
                 Ok(SignalProcessResult::Executed(result))

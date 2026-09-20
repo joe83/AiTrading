@@ -28,6 +28,8 @@ pub enum ExchangeId {
     Mexc,
     Alpaca,
     IcMarkets,
+    Binance,
+    Bybit,
 }
 
 impl std::fmt::Display for ExchangeId {
@@ -36,6 +38,8 @@ impl std::fmt::Display for ExchangeId {
             ExchangeId::Mexc => write!(f, "MEXC"),
             ExchangeId::Alpaca => write!(f, "Alpaca"),
             ExchangeId::IcMarkets => write!(f, "IC Markets"),
+            ExchangeId::Binance => write!(f, "Binance"),
+            ExchangeId::Bybit => write!(f, "Bybit"),
         }
     }
 }

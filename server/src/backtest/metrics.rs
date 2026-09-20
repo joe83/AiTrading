@@ -38,12 +38,22 @@ pub struct BacktestMetrics {
     pub drawdown_curve: Vec<f64>,
 }
 
-/// A single completed trade for metrics computation.
-#[derive(Debug, Clone)]
+/// A single completed trade for metrics computation and reporting.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompletedTrade {
+    pub symbol: String,
+    pub side: String,
+    pub entry_time: chrono::DateTime<chrono::Utc>,
+    pub exit_time: chrono::DateTime<chrono::Utc>,
+    pub entry_price: Decimal,
+    pub exit_price: Decimal,
+    pub quantity: Decimal,
     pub pnl: Decimal,
+    pub pnl_pct: f64,
     pub fees: Decimal,
     pub holding_bars: usize,
+    pub reasoning: String,
+    pub exit_reason: String,
 }
 
 impl BacktestMetrics {
@@ -275,10 +285,53 @@ mod tests {
 
     #[test]
     fn test_compute_metrics_basic() {
+        let now = chrono::Utc::now();
         let trades = vec![
-            CompletedTrade { pnl: Decimal::new(100, 0), fees: Decimal::new(1, 0), holding_bars: 5 },
-            CompletedTrade { pnl: Decimal::new(-50, 0), fees: Decimal::new(1, 0), holding_bars: 3 },
-            CompletedTrade { pnl: Decimal::new(200, 0), fees: Decimal::new(2, 0), holding_bars: 10 },
+            CompletedTrade {
+                symbol: "BTCUSDT".to_string(),
+                side: "BUY".to_string(),
+                entry_time: now,
+                exit_time: now,
+                entry_price: Decimal::new(50000, 0),
+                exit_price: Decimal::new(51000, 0),
+                quantity: Decimal::new(1, 0),
+                pnl: Decimal::new(100, 0),
+                pnl_pct: 2.0,
+                fees: Decimal::new(1, 0),
+                holding_bars: 5,
+                reasoning: "Test win".to_string(),
+                exit_reason: "take_profit".to_string(),
+            },
+            CompletedTrade {
+                symbol: "BTCUSDT".to_string(),
+                side: "BUY".to_string(),
+                entry_time: now,
+                exit_time: now,
+                entry_price: Decimal::new(50000, 0),
+                exit_price: Decimal::new(49500, 0),
+                quantity: Decimal::new(1, 0),
+                pnl: Decimal::new(-50, 0),
+                pnl_pct: -1.0,
+                fees: Decimal::new(1, 0),
+                holding_bars: 3,
+                reasoning: "Test loss".to_string(),
+                exit_reason: "stop_loss".to_string(),
+            },
+            CompletedTrade {
+                symbol: "BTCUSDT".to_string(),
+                side: "BUY".to_string(),
+                entry_time: now,
+                exit_time: now,
+                entry_price: Decimal::new(50000, 0),
+                exit_price: Decimal::new(52000, 0),
+                quantity: Decimal::new(1, 0),
+                pnl: Decimal::new(200, 0),
+                pnl_pct: 4.0,
+                fees: Decimal::new(2, 0),
+                holding_bars: 10,
+                reasoning: "Test big win".to_string(),
+                exit_reason: "take_profit".to_string(),
+            },
         ];
 
         let equity = vec![1000.0, 1050.0, 1100.0, 1000.0, 1050.0, 1200.0, 1250.0];

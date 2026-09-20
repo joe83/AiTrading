@@ -6,9 +6,11 @@ import { DashboardPage } from './pages/DashboardPage';
 import { ChartsPage } from './pages/ChartsPage';
 import { PositionsPage } from './pages/PositionsPage';
 import { SignalsPage } from './pages/SignalsPage';
+import { MemeRadarPage } from './pages/MemeRadarPage';
 import { TradeHistoryPage } from './pages/TradeHistoryPage';
 import { BacktestPage } from './pages/BacktestPage';
 import { ExchangesPage } from './pages/ExchangesPage';
+import { ApiKeysPage } from './pages/ApiKeysPage';
 import { SettingsPage } from './pages/SettingsPage';
 
 /**
@@ -43,9 +45,11 @@ export default function App() {
           <Route path="/charts" element={<ChartsPage />} />
           <Route path="/positions" element={<PositionsPage />} />
           <Route path="/signals" element={<SignalsPage />} />
+          <Route path="/meme-radar" element={<MemeRadarPage />} />
           <Route path="/trades" element={<TradeHistoryPage />} />
           <Route path="/backtest" element={<BacktestPage />} />
           <Route path="/exchanges" element={<ExchangesPage />} />
+          <Route path="/api-keys" element={<ApiKeysPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
 

@@ -3,6 +3,7 @@ pub mod technical_analysis;
 pub mod sentiment_analysis;
 pub mod pattern_recognition;
 pub mod decision_maker;
+pub mod meme_radar;
 
 use anyhow::Result;
 use std::sync::Arc;
@@ -13,6 +14,7 @@ use crate::models::*;
 
 use self::decision_maker::DecisionMaker;
 use self::grok_client::GrokClient;
+use self::meme_radar::MemeRadarEngine;
 use self::pattern_recognition::PatternRecognizer;
 use self::sentiment_analysis::SentimentAnalyzer;
 use self::technical_analysis::TechnicalAnalyzer;
@@ -24,11 +26,13 @@ pub struct AiEngine {
     pub sentiment: SentimentAnalyzer,
     pub pattern: PatternRecognizer,
     pub decision_maker: DecisionMaker,
+    pub meme_radar: Arc<MemeRadarEngine>,
 }
 
 impl AiEngine {
     pub fn new(config: &AppConfig) -> Self {
         let grok = Arc::new(GrokClient::new(&config.grok));
+        let meme_radar = Arc::new(MemeRadarEngine::new(grok.clone()));
 
         Self {
             grok: grok.clone(),
@@ -36,6 +40,7 @@ impl AiEngine {
             sentiment: SentimentAnalyzer::new(grok.clone()),
             pattern: PatternRecognizer::new(),
             decision_maker: DecisionMaker::new(grok.clone(), &config.trading),
+            meme_radar,
         }
     }
 

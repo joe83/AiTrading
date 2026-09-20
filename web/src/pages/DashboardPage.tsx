@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
-import { Activity, TrendingUp, Briefcase, Bot } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Activity, TrendingUp, Briefcase, Bot, Flame, ArrowRight, Sparkles } from 'lucide-react';
 import { StatCard } from '../components/StatCard';
 import { PnlDisplay } from '../components/PnlDisplay';
 import { StatusBadge } from '../components/StatusBadge';
@@ -65,6 +66,57 @@ export function DashboardPage() {
           value={dashboard?.pending_signals ?? 0}
           icon={<Bot size={18} />}
         />
+      </div>
+
+      {/* Meme Radar Quick Access Banner */}
+      <div className="card" style={{
+        background: 'linear-gradient(135deg, rgba(30, 27, 75, 0.4) 0%, rgba(245, 158, 11, 0.08) 100%)',
+        borderColor: 'rgba(245, 158, 11, 0.3)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '16px 20px',
+        flexWrap: 'wrap',
+        gap: '12px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div style={{
+            width: '36px',
+            height: '36px',
+            borderRadius: '8px',
+            background: 'rgba(245, 158, 11, 0.15)',
+            border: '1px solid rgba(245, 158, 11, 0.35)',
+            color: '#fbbf24',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}>
+            <Flame size={20} />
+          </div>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontWeight: 700, fontSize: '0.9375rem', color: 'var(--text-primary)' }}>
+                Meme Coin & Social Sentiment Radar
+              </span>
+              <span className="badge badge-info" style={{ fontSize: '0.6875rem' }}>
+                <Sparkles size={11} /> Powered by Grok AI
+              </span>
+            </div>
+            <p style={{ margin: 0, fontSize: '0.8125rem', color: 'var(--text-tertiary)', marginTop: '2px' }}>
+              Track viral attention spikes on Crypto Twitter (X) and trade trending meme tokens on MEXC Spot.
+            </p>
+          </div>
+        </div>
+        <Link to="/meme-radar" className="btn btn-primary btn-sm" style={{
+          background: 'linear-gradient(135deg, #f59e0b 0%, #ef4444 100%)',
+          border: 'none',
+          fontWeight: 700,
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '6px',
+        }}>
+          Open Meme Radar <ArrowRight size={14} />
+        </Link>
       </div>
 
       {/* Two-column layout */}

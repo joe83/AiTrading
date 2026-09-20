@@ -227,7 +227,17 @@ RUST_LOG=info,ai_trading_server=info
 EOF
 
 chmod 600 server/.env
-log_success "server/.env created with strict 600 permissions."
+# Copy to root .env so docker compose in root finds all variables automatically
+cp server/.env .env
+chmod 600 .env
+
+# Export variables into current shell session
+set -a
+# shellcheck source=/dev/null
+source server/.env
+set +a
+
+log_success "Environment files created (server/.env and .env) with strict 600 permissions."
 
 # Also update web/.env for production domain if needed
 if [ "$DOMAIN" != "localhost" ]; then
@@ -269,15 +279,15 @@ log_step "Building and Starting Production Containers"
 log_info "Building TimescaleDB, Redis, Rust Server, React Dashboard, and Nginx..."
 
 # Stop any running containers
-docker compose -f docker-compose.prod.yml down --remove-orphans 2>/dev/null || true
+docker compose --env-file server/.env -f docker-compose.prod.yml down --remove-orphans 2>/dev/null || true
 
 # Build & launch in detached mode
-docker compose -f docker-compose.prod.yml build
-docker compose -f docker-compose.prod.yml up -d
+docker compose --env-file server/.env -f docker-compose.prod.yml build
+docker compose --env-file server/.env -f docker-compose.prod.yml up -d
 
 log_info "Waiting for services to pass health checks..."
 sleep 15
-docker compose -f docker-compose.prod.yml ps
+docker compose --env-file server/.env -f docker-compose.prod.yml ps
 
 # ------------------------------------------------------------------------------
 # 8. Setup Automated Daily Database Backup
@@ -297,7 +307,7 @@ if [ "$DOMAIN" != "localhost" ]; then
     read -p "Would you like to issue a free Let's Encrypt SSL certificate for ${DOMAIN} now? (y/N): " -r SSL_CHOICE
     if [[ $SSL_CHOICE =~ ^[Yy]$ ]]; then
         log_step "Issuing Let's Encrypt SSL Certificate"
-        docker compose -f docker-compose.prod.yml run --rm certbot certonly \
+        docker compose --env-file server/.env -f docker-compose.prod.yml run --rm certbot certonly \
             --webroot --webroot-path=/var/www/certbot \
             --email "$LE_EMAIL" --agree-tos --no-eff-email \
             -d "$DOMAIN" || log_warning "Certbot issuance failed. Check DNS propagation."
@@ -305,7 +315,7 @@ if [ "$DOMAIN" != "localhost" ]; then
         if [ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]; then
             sed -i "s|/etc/letsencrypt/live/trading/fullchain.pem|/etc/letsencrypt/live/${DOMAIN}/fullchain.pem|g" docker/nginx/conf.d/trading.conf
             sed -i "s|/etc/letsencrypt/live/trading/privkey.pem|/etc/letsencrypt/live/${DOMAIN}/privkey.pem|g" docker/nginx/conf.d/trading.conf
-            docker compose -f docker-compose.prod.yml exec nginx nginx -s reload
+            docker compose --env-file server/.env -f docker-compose.prod.yml exec nginx nginx -s reload
             log_success "Let's Encrypt SSL certificate activated!"
         fi
     else

@@ -8,6 +8,8 @@ pub struct AppConfig {
     pub mexc: ExchangeConfig,
     pub alpaca: AlpacaConfig,
     pub ic_markets: IcMarketsConfig,
+    pub binance: BinanceConfig,
+    pub bybit: BybitConfig,
     pub database: DatabaseConfig,
     pub server: ServerConfig,
     pub jwt: JwtConfig,
@@ -29,6 +31,25 @@ pub struct ExchangeConfig {
     pub secret_key: String,
     pub base_url: String,
     pub ws_url: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct BinanceConfig {
+    pub api_key: String,
+    pub secret_key: String,
+    pub base_url: String,
+    pub ws_url: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct BybitConfig {
+    pub api_key: String,
+    pub secret_key: String,
+    pub base_url: String,
+    pub ws_url: String,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +59,7 @@ pub struct AlpacaConfig {
     pub base_url: String,
     pub data_url: String,
     pub ws_url: String,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +69,7 @@ pub struct IcMarketsConfig {
     pub client_id: String,
     pub client_secret: String,
     pub base_url: String,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -108,6 +131,7 @@ impl AppConfig {
                 secret_key: env_var_or("MEXC_SECRET_KEY", ""),
                 base_url: env_var_or("MEXC_BASE_URL", "https://api.mexc.com"),
                 ws_url: env_var_or("MEXC_WS_URL", "wss://wbs.mexc.com/ws"),
+                enabled: env_var_or("MEXC_ENABLED", "false").parse().unwrap_or(false),
             },
             alpaca: AlpacaConfig {
                 api_key: env_var_or("ALPACA_API_KEY", ""),
@@ -115,6 +139,7 @@ impl AppConfig {
                 base_url: env_var_or("ALPACA_BASE_URL", "https://paper-api.alpaca.markets"),
                 data_url: env_var_or("ALPACA_DATA_URL", "https://data.alpaca.markets"),
                 ws_url: env_var_or("ALPACA_WS_URL", "wss://stream.data.alpaca.markets"),
+                enabled: env_var_or("ALPACA_ENABLED", "false").parse().unwrap_or(false),
             },
             ic_markets: IcMarketsConfig {
                 api_key: env_var_or("IC_MARKETS_API_KEY", ""),
@@ -122,6 +147,21 @@ impl AppConfig {
                 client_id: env_var_or("IC_MARKETS_CLIENT_ID", ""),
                 client_secret: env_var_or("IC_MARKETS_CLIENT_SECRET", ""),
                 base_url: env_var_or("IC_MARKETS_BASE_URL", "https://openapi.ctrader.com"),
+                enabled: env_var_or("IC_MARKETS_ENABLED", "false").parse().unwrap_or(false),
+            },
+            binance: BinanceConfig {
+                api_key: env_var_or("BINANCE_API_KEY", ""),
+                secret_key: env_var_or("BINANCE_SECRET_KEY", ""),
+                base_url: env_var_or("BINANCE_BASE_URL", "https://api.binance.com"),
+                ws_url: env_var_or("BINANCE_WS_URL", "wss://stream.binance.com:9443/ws"),
+                enabled: env_var_or("BINANCE_ENABLED", "false").parse().unwrap_or(false),
+            },
+            bybit: BybitConfig {
+                api_key: env_var_or("BYBIT_API_KEY", ""),
+                secret_key: env_var_or("BYBIT_SECRET_KEY", ""),
+                base_url: env_var_or("BYBIT_BASE_URL", "https://api.bybit.com"),
+                ws_url: env_var_or("BYBIT_WS_URL", "wss://stream.bybit.com/v5/public/spot"),
+                enabled: env_var_or("BYBIT_ENABLED", "false").parse().unwrap_or(false),
             },
             database: DatabaseConfig {
                 url: env_var("DATABASE_URL")?,
@@ -188,3 +228,68 @@ fn env_var(key: &str) -> Result<String> {
 fn env_var_or(key: &str, default: &str) -> String {
     env::var(key).unwrap_or_else(|_| default.to_string())
 }
+
+/// Update environment variables in .env file(s) and in the current process.
+pub fn update_env_file(updates: &[(&str, &str)]) -> Result<()> {
+    use std::fs;
+    use std::path::Path;
+
+    // 1. Set variables in the current running process
+    for &(key, val) in updates {
+        env::set_var(key, val);
+    }
+
+    // 2. Identify potential .env files
+    let candidates = ["/app/.env", "./server/.env", ".env", "../.env"];
+    let mut updated_any = false;
+
+    for path_str in &candidates {
+        let path = Path::new(path_str);
+        if path.exists() {
+            let content = match fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+            let mut keys_found: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+            for line in lines.iter_mut() {
+                let trimmed = line.trim().to_string();
+                for &(key, val) in updates {
+                    if trimmed.starts_with(&format!("{key}=")) {
+                        *line = format!("{key}={val}");
+                        keys_found.insert(key.to_string());
+                    }
+                }
+            }
+
+            for &(key, val) in updates {
+                if !keys_found.contains(key) {
+                    lines.push(format!("{key}={val}"));
+                }
+            }
+
+            let new_content = lines.join("\n") + "\n";
+            if let Err(e) = fs::write(path, new_content) {
+                tracing::warn!("Failed to write to {}: {}", path_str, e);
+            } else {
+                tracing::info!("Successfully updated .env file at {}", path_str);
+                updated_any = true;
+            }
+        }
+    }
+
+    if !updated_any {
+        let fallback = if Path::new("/app").exists() { "/app/.env" } else { ".env" };
+        let mut content = String::new();
+        for &(key, val) in updates {
+            content.push_str(&format!("{key}={val}\n"));
+        }
+        let _ = fs::write(fallback, content);
+        tracing::info!("Created fallback .env file at {}", fallback);
+    }
+
+    Ok(())
+}
+

@@ -81,6 +81,16 @@ if [ ! -f "server/.env" ]; then
     log_warning "Please edit server/.env with your production API keys, passwords, and JWT secret before proceeding!"
 fi
 
+# Sync to root .env for docker compose
+cp server/.env .env
+chmod 600 .env
+
+# Export variables into subshell
+set -a
+# shellcheck source=/dev/null
+source server/.env
+set +a
+
 # 6. Ensure SSL dummy certificate exists for initial Nginx bootstrap
 log_info "Checking SSL certificate status..."
 CERT_DIR="docker/nginx/dummy-certs"
@@ -96,14 +106,14 @@ fi
 
 # 7. Build and start containers
 log_info "Building and launching production containers with Docker Compose..."
-docker compose -f docker-compose.prod.yml down --remove-orphans || true
-docker compose -f docker-compose.prod.yml build --parallel
-docker compose -f docker-compose.prod.yml up -d
+docker compose --env-file server/.env -f docker-compose.prod.yml down --remove-orphans || true
+docker compose --env-file server/.env -f docker-compose.prod.yml build --parallel
+docker compose --env-file server/.env -f docker-compose.prod.yml up -d
 
 # 8. Wait for services health check
 log_info "Waiting for all services to become healthy..."
 sleep 15
-docker compose -f docker-compose.prod.yml ps
+docker compose --env-file server/.env -f docker-compose.prod.yml ps
 
 log_success "AI Trading Platform successfully deployed and running!"
 echo "=================================================================="

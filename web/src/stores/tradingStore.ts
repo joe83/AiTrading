@@ -73,12 +73,13 @@ interface TradingState {
   fetchSystemStatus: () => Promise<void>;
 
   // Actions — trading controls
+  toggleExchange: (exchange: string, enabled?: boolean) => Promise<void>;
   approveSignal: (id: string) => Promise<void>;
   rejectSignal: (id: string) => Promise<void>;
   setTradingMode: (mode: 'auto' | 'manual') => Promise<void>;
   pauseTrading: () => Promise<void>;
   resumeTrading: () => Promise<void>;
-  runBacktest: (config: Parameters<typeof api.runBacktest>[0]) => Promise<void>;
+  runBacktest: (config: Parameters<typeof api.runBacktest>[0]) => Promise<BacktestResult | null>;
 
   // Actions — WebSocket
   initWebSocket: () => void;
@@ -186,6 +187,44 @@ export const useTradingStore = create<TradingState>((set, get) => ({
   // Trading Controls
   // ---------------------------------------------------------------------------
 
+  toggleExchange: async (exchange: string, enabled?: boolean) => {
+    const currentExchanges = get().exchanges;
+    const target = currentExchanges.find(
+      (e) => (e.exchange || (e as { id?: string }).id || '').toLowerCase() === exchange.toLowerCase()
+    );
+    const newEnabled = enabled !== undefined ? enabled : !(target?.enabled);
+
+    // Optimistic update
+    set({
+      exchanges: currentExchanges.map((e) => {
+        const key = (e.exchange || (e as { id?: string }).id || '').toLowerCase();
+        if (key === exchange.toLowerCase()) {
+          return { ...e, enabled: newEnabled };
+        }
+        return e;
+      }),
+    });
+
+    try {
+      const res = await api.toggleExchange(exchange, enabled);
+      get().addToast({
+        type: res.enabled ? 'success' : 'warning',
+        title: `${res.exchange} Auto-Trading`,
+        message: `Auto bot transactions are now ${res.enabled ? 'ENABLED' : 'DISABLED'} for ${res.exchange}.`,
+      });
+      await get().fetchExchanges();
+    } catch (err: unknown) {
+      // Revert optimistic update
+      set({ exchanges: currentExchanges });
+      const errorMsg = err instanceof Error ? err.message : 'Failed to update exchange auto-trading state';
+      get().addToast({
+        type: 'error',
+        title: 'Action Denied',
+        message: errorMsg,
+      });
+    }
+  },
+
   approveSignal: async (id: string) => {
     try {
       await api.approveSignal(id);
@@ -241,14 +280,18 @@ export const useTradingStore = create<TradingState>((set, get) => ({
     set((s) => ({ loading: { ...s.loading, backtest_run: true } }));
     try {
       const result = await api.runBacktest(config);
-      if (result.status === 'completed') {
-        get().addToast({ type: 'success', title: 'Backtest Complete', message: `Return: ${result.result?.metrics.total_return_pct.toFixed(2)}%` });
+      if (result.status === 'completed' && result.result) {
+        get().addToast({ type: 'success', title: 'Backtest Complete', message: `Return: ${result.result.metrics.total_return_pct.toFixed(2)}%` });
+        await get().fetchBacktestResults();
+        return result.result;
       } else {
         get().addToast({ type: 'error', title: 'Backtest Failed', message: 'Check server logs' });
       }
       get().fetchBacktestResults();
+      return null;
     } catch {
       get().addToast({ type: 'error', title: 'Backtest Error', message: 'Failed to run backtest' });
+      return null;
     } finally {
       set((s) => ({ loading: { ...s.loading, backtest_run: false } }));
     }
