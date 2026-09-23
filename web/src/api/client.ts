@@ -150,6 +150,8 @@ export interface GrokKeyStatus {
   base_url: string;
   model_primary: string;
   model_fast: string;
+  mode?: 'api' | 'proxy' | string;
+  proxy_account?: string | null;
 }
 
 export interface MexcKeyStatus {
@@ -206,6 +208,7 @@ export interface ApiKeysStatus {
 export interface UpdateApiKeysRequest {
   grok_api_key?: string;
   grok_base_url?: string;
+  grok_mode?: 'api' | 'proxy';
   grok_model_primary?: string;
   grok_model_fast?: string;
 
@@ -458,7 +461,78 @@ export const api = {
 
   verifyToken: () =>
     request<{ valid: boolean; username: string; expires_at: number }>('/api/auth/verify'),
+
+  getLessons: (status?: string) => {
+    const query = status ? `?status=${encodeURIComponent(status)}` : '';
+    return request<{ lessons: LessonRecord[] }>(`/api/lessons${query}`);
+  },
+
+  approveLesson: (id: string) =>
+    request<LessonDecision>(`/api/lessons/${id}/approve`, { method: 'POST' }),
+
+  rejectLesson: (id: string) =>
+    request<{ id: string; status: string }>(`/api/lessons/${id}/reject`, { method: 'POST' }),
+
+  getWatch: () => request<WatchSnapshot>('/api/watch'),
+
+  getGrokAccount: () => request<GrokAccount>('/api/grok/account'),
+
+  getGrokLogin: () => request<GrokLogin>('/api/grok/login'),
+
+  startGrokLogin: () => request<GrokLogin>('/api/grok/login', { method: 'POST' }),
 };
+
+export interface LessonRecord {
+  id: string;
+  scope: string;
+  claim: string;
+  evidence_trade_ids: string[];
+  sample_size: number;
+  status: 'hypothesis' | 'supported' | 'rejected' | string;
+  created_at: string;
+}
+
+export interface WatchSnapshot {
+  status: {
+    enabled: boolean;
+    handles: string[];
+    interval_secs: number;
+    running: boolean;
+    last_tick_at: string | null;
+    last_result: string;
+    last_error: string | null;
+  };
+  posts: Array<{
+    post_id: string;
+    handle: string;
+    body: string;
+    queued: boolean;
+    seen_at: string;
+  }>;
+}
+
+export interface GrokAccount {
+  logged_in: boolean;
+  account: string | null;
+  error?: string;
+}
+
+export interface GrokLogin {
+  status: 'idle' | 'waiting' | 'approved' | 'error' | string;
+  verification_url?: string | null;
+  user_code?: string | null;
+  account?: string | null;
+  error?: string | null;
+}
+
+export interface LessonDecision {
+  lesson_id: string;
+  id: string;
+  scope: string;
+  rule: string;
+  sample_size: number;
+  status: string;
+}
 
 export const apiClient = api;
 

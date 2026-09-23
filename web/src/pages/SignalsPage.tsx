@@ -18,7 +18,12 @@ export function SignalsPage() {
   useEffect(() => {
     fetchSignals();
     fetchPendingSignals();
-  }, []);
+    const timer = window.setInterval(() => {
+      fetchSignals();
+      fetchPendingSignals();
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [fetchSignals, fetchPendingSignals]);
 
   return (
     <div className="page signals-page animate-fade-in">

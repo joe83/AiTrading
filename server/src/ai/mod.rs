@@ -1,5 +1,8 @@
+pub mod agent;
 pub mod grok_client;
+pub mod watch_loop;
 pub mod technical_analysis;
+pub mod tools;
 pub mod sentiment_analysis;
 pub mod pattern_recognition;
 pub mod decision_maker;
@@ -7,9 +10,10 @@ pub mod meme_radar;
 
 use anyhow::Result;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::config::AppConfig;
+use crate::db::Database;
 use crate::models::*;
 
 use self::decision_maker::DecisionMaker;
@@ -27,10 +31,11 @@ pub struct AiEngine {
     pub pattern: PatternRecognizer,
     pub decision_maker: DecisionMaker,
     pub meme_radar: Arc<MemeRadarEngine>,
+    db: Arc<Database>,
 }
 
 impl AiEngine {
-    pub fn new(config: &AppConfig) -> Self {
+    pub fn new(config: &AppConfig, db: Arc<Database>) -> Self {
         let grok = Arc::new(GrokClient::new(&config.grok));
         let meme_radar = Arc::new(MemeRadarEngine::new(grok.clone()));
 
@@ -39,8 +44,9 @@ impl AiEngine {
             technical: TechnicalAnalyzer::new(),
             sentiment: SentimentAnalyzer::new(grok.clone()),
             pattern: PatternRecognizer::new(),
-            decision_maker: DecisionMaker::new(grok.clone(), &config.trading),
+            decision_maker: DecisionMaker::new(grok.clone(), &config.trading, db.clone()),
             meme_radar,
+            db,
         }
     }
 
@@ -71,7 +77,7 @@ impl AiEngine {
         info!("Sentiment analysis complete for {symbol}: score={}", sentiment.score);
 
         // Step 4: AI Decision Making (async — calls Grok API)
-        let signal = self
+        let (signal, decision_tokens, model) = self
             .decision_maker
             .decide(symbol, exchange, &tech_result, &patterns, &sentiment, candles)
             .await?;
@@ -81,7 +87,7 @@ impl AiEngine {
             signal.confidence * 100.0
         );
 
-        Ok(AnalysisResult {
+        let result = AnalysisResult {
             id: uuid::Uuid::new_v4(),
             symbol: symbol.to_string(),
             exchange,
@@ -95,8 +101,17 @@ impl AiEngine {
                 .join(", "),
             overall_analysis: signal.reasoning.clone(),
             signal,
-            grok_model_used: "grok-4.6".to_string(),
-            tokens_used: 0, // TODO: track from Grok response
-        })
+            grok_model_used: model,
+            tokens_used: sentiment.tokens_used.saturating_add(decision_tokens),
+        };
+
+        if let Err(e) = self.db.insert_signal(&result.signal).await {
+            warn!("Failed to persist signal {}: {e}", result.signal.id);
+        }
+        if let Err(e) = self.db.insert_analysis(&result).await {
+            warn!("Failed to persist analysis {}: {e}", result.id);
+        }
+
+        Ok(result)
     }
 }

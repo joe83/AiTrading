@@ -32,6 +32,19 @@ pub enum ExchangeId {
     Bybit,
 }
 
+impl ExchangeId {
+    /// Stable short code stored in the database. Fits `VARCHAR(16)`.
+    pub fn as_db_str(self) -> &'static str {
+        match self {
+            ExchangeId::Mexc => "mexc",
+            ExchangeId::Alpaca => "alpaca",
+            ExchangeId::IcMarkets => "ic_markets",
+            ExchangeId::Binance => "binance",
+            ExchangeId::Bybit => "bybit",
+        }
+    }
+}
+
 impl std::fmt::Display for ExchangeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

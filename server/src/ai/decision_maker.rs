@@ -1,27 +1,31 @@
 use anyhow::Result;
 use rust_decimal::Decimal;
 use std::sync::Arc;
-use tracing::{debug, info, warn};
+use std::time::Duration;
+use tracing::{info, warn};
 
 use super::grok_client::{ChatMessage, GrokClient};
 use super::pattern_recognition::{DetectedPattern, PatternDirection};
 use super::sentiment_analysis::SentimentResult;
 use super::technical_analysis::{TechnicalResult, TrendDirection};
 use crate::config::TradingConfig;
+use crate::db::{format_playbook, Database};
 use crate::models::*;
 
 /// The AI Decision Maker — the "brain" that synthesizes all analysis into actionable trading signals.
 pub struct DecisionMaker {
     grok: Arc<GrokClient>,
+    db: Arc<Database>,
     max_position_size_pct: f64,
     default_stop_loss_pct: f64,
     default_take_profit_pct: f64,
 }
 
 impl DecisionMaker {
-    pub fn new(grok: Arc<GrokClient>, config: &TradingConfig) -> Self {
+    pub fn new(grok: Arc<GrokClient>, config: &TradingConfig, db: Arc<Database>) -> Self {
         Self {
             grok,
+            db,
             max_position_size_pct: config.max_position_size_pct,
             default_stop_loss_pct: config.default_stop_loss_pct,
             default_take_profit_pct: config.default_take_profit_pct,
@@ -38,17 +42,18 @@ impl DecisionMaker {
         patterns: &[DetectedPattern],
         sentiment: &SentimentResult,
         candles: &CandleSeries,
-    ) -> Result<TradingSignal> {
+    ) -> Result<(TradingSignal, u32, String)> {
         let closes = candles.closes_f64();
         let current_price = *closes.last().unwrap_or(&0.0);
 
-        // Build comprehensive analysis summary for Grok
+        let playbook = self.playbook_text(symbol).await;
         let analysis_summary = self.build_analysis_summary(
             symbol,
             current_price,
             technical,
             patterns,
             sentiment,
+            &playbook,
         );
 
         // Call Grok AI for final decision
@@ -81,8 +86,10 @@ Respond in JSON format:
 
         let response = self
             .grok
-            .chat_json(messages, true, Some(0.2), Some(2048))
+            .chat_json(messages, true, Some(0.2), Some(2048), "medium", None)
             .await?;
+        let tokens_used = response.tokens_used;
+        let model = response.model.clone();
 
         // Parse Grok's decision
         let decision: serde_json::Value = serde_json::from_str(&response.content)
@@ -170,7 +177,7 @@ Respond in JSON format:
             signal.confidence * 100.0
         );
 
-        Ok(signal)
+        Ok((signal, tokens_used, model))
     }
 
     /// Build comprehensive analysis summary string for Grok.
@@ -181,6 +188,7 @@ Respond in JSON format:
         technical: &TechnicalResult,
         patterns: &[DetectedPattern],
         sentiment: &SentimentResult,
+        playbook: &str,
     ) -> String {
         let mut summary = format!("=== {symbol} Analysis ===\n\n");
 
@@ -244,8 +252,24 @@ Respond in JSON format:
         summary.push_str(&format!("Max Position Size: {:.1}%\n", self.max_position_size_pct));
         summary.push_str(&format!("Default Stop Loss: {:.1}%\n", self.default_stop_loss_pct));
         summary.push_str(&format!("Default Take Profit: {:.1}%\n", self.default_take_profit_pct));
+        summary.push_str(playbook);
 
         summary
+    }
+
+    /// Load approved rules. A slow or failed lookup leaves the decision on the market data alone.
+    async fn playbook_text(&self, symbol: &str) -> String {
+        match tokio::time::timeout(Duration::from_secs(2), self.db.active_playbook(symbol)).await {
+            Ok(Ok(rules)) => format_playbook(&rules),
+            Ok(Err(e)) => {
+                warn!("Playbook lookup failed for {symbol}: {e}");
+                String::new()
+            }
+            Err(_) => {
+                warn!("Playbook lookup timed out for {symbol}");
+                String::new()
+            }
+        }
     }
 
     /// Generate a fallback decision if Grok API fails or returns invalid JSON.

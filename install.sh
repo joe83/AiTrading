@@ -35,7 +35,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-clear
+clear || true
 echo -e "${CYAN}${BOLD}"
 cat << "EOF"
     ___    ____   ______               ___                
@@ -156,7 +156,27 @@ log_step "Generating Cryptographic Secrets & Environment Configuration"
 DB_PASS=$(openssl rand -hex 20)
 REDIS_PASS=$(openssl rand -hex 20)
 JWT_SECRET=$(openssl rand -hex 32)
-ADMIN_HASH=$(python3 -c "import hashlib; print(hashlib.sha256('${ADMIN_PASSWORD}'.encode()).hexdigest())")
+ADMIN_PASSWORD="${ADMIN_PASSWORD//$'\r'/}"
+XAI_API_KEY="${XAI_API_KEY//$'\r'/}"
+ADMIN_HASH=$(printf '%s' "$ADMIN_PASSWORD" | python3 -c "import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())")
+
+# proxy = SuperGrok subscription on this host. api = metered XAI_API_KEY.
+if [ -z "${GROK_MODE:-}" ]; then
+    if [ -n "${XAI_API_KEY}" ] && [ "${XAI_API_KEY}" != "xai-placeholder-configure-in-server-env" ]; then
+        GROK_MODE="api"
+    else
+        GROK_MODE="proxy"
+    fi
+fi
+if [ "$GROK_MODE" = "proxy" ]; then
+    XAI_BASE_URL="http://grok-proxy:8585/v1"
+    if [ -z "${XAI_API_KEY}" ]; then
+        XAI_API_KEY="subscription"
+    fi
+else
+    GROK_MODE="api"
+    XAI_BASE_URL="https://api.x.ai/v1"
+fi
 
 # Write server/.env
 cat <<EOF > server/.env
@@ -166,10 +186,15 @@ cat <<EOF > server/.env
 # =============================================================================
 
 # Grok AI Configuration
+# GROK_MODE is recorded here for operators. The live switch is XAI_BASE_URL.
+# API Keys in the dashboard can change it later without reinstalling.
+GROK_MODE=${GROK_MODE}
 XAI_API_KEY=${XAI_API_KEY}
-XAI_BASE_URL=https://api.x.ai/v1
+XAI_BASE_URL=${XAI_BASE_URL}
 XAI_MODEL_PRIMARY=grok-4.6
 XAI_MODEL_FAST=grok-4.5
+GROK_PROXY_URL=http://grok-proxy:8585/v1
+GROK_CONTROL_URL=http://grok-proxy:8586
 
 # Exchange API Keys
 MEXC_API_KEY=
@@ -221,6 +246,13 @@ DEFAULT_STOP_LOSS_PCT=2.0
 DEFAULT_TAKE_PROFIT_PCT=4.0
 ANALYSIS_INTERVAL_SECS=30
 SENTIMENT_CHECK_INTERVAL_SECS=300
+
+# Sleepless X watcher. Queues review signals. Does not place orders.
+WATCH_ENABLED=true
+WATCH_INTERVAL_SECS=60
+WATCH_HANDLES=elonmusk,realDonaldTrump
+WATCH_MIN_CONFIDENCE=0.7
+WATCH_MAX_POST_AGE_SECS=600
 
 # Logging
 RUST_LOG=info,ai_trading_server=info
@@ -326,7 +358,7 @@ fi
 # ------------------------------------------------------------------------------
 # 10. Summary & Completion
 # ------------------------------------------------------------------------------
-clear
+clear || true
 echo -e "${GREEN}${BOLD}"
 cat << "EOF"
 ==================================================================
@@ -341,6 +373,13 @@ echo ""
 echo -e "  🔑 ${BOLD}Login Credentials:${NC}"
 echo -e "     • Username:       ${CYAN}${BOLD}${ADMIN_USER}${NC}"
 echo -e "     • Password:       ${CYAN}${BOLD}${ADMIN_PASSWORD}${NC}"
+echo ""
+echo -e "  🤖 ${BOLD}Grok connection:${NC}   ${CYAN}${GROK_MODE}${NC}"
+if [ "$GROK_MODE" = "proxy" ]; then
+echo -e "     Open API Keys and choose Change account to approve SuperGrok."
+else
+echo -e "     Using the xAI API key. Switch to SuperGrok later from API Keys."
+fi
 echo ""
 echo -e "  ⚙️  ${BOLD}Configuration File:${NC}  ${SCRIPT_DIR}/server/.env"
 echo -e "  💾 ${BOLD}Database Backups:${NC}    /var/backups/aitrading (Daily at 03:00 UTC)"

@@ -35,9 +35,12 @@ The installer automatically:
 - Installs Docker Engine, Compose plugin, UFW, and Fail2ban.
 - Configures firewall rules (securing DB & internal ports, opening only 22, 80, 443).
 - Generates cryptographically secure credentials for TimescaleDB, Redis, and JWT.
+- Starts a private SuperGrok proxy. With no `XAI_API_KEY`, Grok uses that subscription. Set `XAI_API_KEY` or `GROK_MODE=api` to use the metered API instead.
 - Configures Nginx reverse proxy with WebSocket stream support and rate-limited auth.
 - Builds and starts production containers in detached mode.
 - Sets up automated daily backups via cron.
+
+After install, open **API Keys** to choose **SuperGrok account** or **xAI API key**. SuperGrok asks you to approve a device login once. The **Watcher** page shows the X scan. It queues review signals and does not place orders.
 
 👉 **Read the full [Production Deployment Guide](docs/DEPLOYMENT.md)** for hardware sizing, region selection, and SSL configuration.
 

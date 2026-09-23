@@ -242,7 +242,11 @@ impl BacktestEngine {
             use_grok,
             ai_calls_made,
             ai_cached_calls,
-            grok_model_used: if use_grok { Some("grok-4.6".to_string()) } else { None },
+            grok_model_used: if use_grok {
+                Some(ai_engine.grok.get_model_primary())
+            } else {
+                None
+            },
             trades: completed_trades,
         };
 
@@ -363,6 +367,7 @@ impl BacktestEngine {
             themes: vec!["backtest_replay".to_string()],
             news_score: None,
             social_score: None,
+            tokens_used: 0,
         };
 
         // 6. Call Grok AI decision maker!
@@ -382,7 +387,7 @@ impl BacktestEngine {
             &sentiment,
             &series,
         ).await {
-            Ok(signal) => {
+            Ok((signal, _, _)) => {
                 *ai_calls_made += 1;
                 // Store in cache for free reruns
                 if let Ok(mut cache) = get_ai_cache().write() {

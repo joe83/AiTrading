@@ -16,7 +16,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from 'lucide-react';
-import { apiClient, type ApiKeysStatus, type UpdateApiKeysRequest } from '../api/client';
+import { api, apiClient, type ApiKeysStatus, type GrokLogin, type UpdateApiKeysRequest } from '../api/client';
 import './ApiKeysPage.css';
 
 export function ApiKeysPage() {
@@ -28,6 +28,10 @@ export function ApiKeysPage() {
 
   // Form states
   const [grokApiKey, setGrokApiKey] = useState('');
+  const [grokMode, setGrokMode] = useState<'api' | 'proxy'>('api');
+  const [grokAccount, setGrokAccount] = useState<string | null>(null);
+  const [grokLogin, setGrokLogin] = useState<GrokLogin | null>(null);
+  const [switchingAccount, setSwitchingAccount] = useState(false);
   const [grokBaseUrl, setGrokBaseUrl] = useState('');
   const [grokModelPrimary, setGrokModelPrimary] = useState('');
   const [grokModelFast, setGrokModelFast] = useState('');
@@ -70,7 +74,11 @@ export function ApiKeysPage() {
       const data = await apiClient.getApiKeys();
       setStatus(data);
       if (data.grok) {
-        setGrokBaseUrl(data.grok.base_url || 'https://api.x.ai/v1');
+        setGrokMode(data.grok.mode === 'proxy' ? 'proxy' : 'api');
+        setGrokAccount(data.grok.proxy_account ?? null);
+        setGrokBaseUrl(
+          data.grok.mode === 'proxy' ? 'https://api.x.ai/v1' : data.grok.base_url || 'https://api.x.ai/v1',
+        );
         setGrokModelPrimary(data.grok.model_primary || 'grok-4.6');
         setGrokModelFast(data.grok.model_fast || 'grok-4.5');
       }
@@ -98,6 +106,36 @@ export function ApiKeysPage() {
   useEffect(() => {
     loadStatus();
   }, []);
+
+  useEffect(() => {
+    if (grokLogin?.status !== 'waiting') return;
+    const timer = window.setInterval(async () => {
+      try {
+        const next = await api.getGrokLogin();
+        setGrokLogin(next);
+        if (next.status === 'approved') {
+          setGrokAccount(next.account ?? null);
+          await loadStatus();
+        }
+      } catch {
+        // The next poll retries.
+      }
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [grokLogin?.status]);
+
+  const changeGrokAccount = async () => {
+    setSwitchingAccount(true);
+    setSaveError(null);
+    try {
+      setGrokLogin(await api.startGrokLogin());
+    } catch (err: unknown) {
+      const e = err as Error;
+      setSaveError(e.message || 'Could not start SuperGrok sign-in');
+    } finally {
+      setSwitchingAccount(false);
+    }
+  };
 
   const handleTest = async (service: 'grok' | 'mexc' | 'alpaca' | 'ic_markets' | 'binance' | 'bybit') => {
     setTestingService(service);
@@ -151,8 +189,9 @@ export function ApiKeysPage() {
 
     const payload: UpdateApiKeysRequest = {};
 
+    payload.grok_mode = grokMode;
     if (grokApiKey.trim()) payload.grok_api_key = grokApiKey.trim();
-    if (grokBaseUrl.trim()) payload.grok_base_url = grokBaseUrl.trim();
+    if (grokMode === 'api' && grokBaseUrl.trim()) payload.grok_base_url = grokBaseUrl.trim();
     if (grokModelPrimary.trim()) payload.grok_model_primary = grokModelPrimary.trim();
     if (grokModelFast.trim()) payload.grok_model_fast = grokModelFast.trim();
 
@@ -260,9 +299,13 @@ export function ApiKeysPage() {
               </div>
             </div>
             <div className="api-keys-card__status-badge">
-              {status?.grok.is_set ? (
+              {status?.grok.mode === 'proxy' ? (
                 <span className="badge badge-success">
-                  <ShieldCheck size={13} /> Active ({status.grok.masked_key})
+                  <ShieldCheck size={13} /> SuperGrok{status.grok.proxy_account ? ` (${status.grok.proxy_account})` : ''}
+                </span>
+              ) : status?.grok.is_set ? (
+                <span className="badge badge-success">
+                  <ShieldCheck size={13} /> API key ({status.grok.masked_key})
                 </span>
               ) : (
                 <span className="badge badge-warning">
@@ -273,6 +316,59 @@ export function ApiKeysPage() {
           </div>
 
           <div className="api-keys-card__body">
+            <div className="form-group">
+              <label className="form-label">Connection</label>
+              <div className="grok-mode">
+                <button
+                  type="button"
+                  className={`btn btn-sm ${grokMode === 'proxy' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setGrokMode('proxy')}
+                >
+                  SuperGrok account
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-sm ${grokMode === 'api' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setGrokMode('api')}
+                >
+                  xAI API key
+                </button>
+              </div>
+              <span className="form-hint">Save to switch the watcher and the rest of the app.</span>
+            </div>
+
+            {grokMode === 'proxy' ? (
+              <div className="form-group">
+                <label className="form-label">SuperGrok account</label>
+                <p className="grok-account">{grokAccount || 'Not signed in'}</p>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => void changeGrokAccount()}
+                  disabled={switchingAccount || grokLogin?.status === 'waiting'}
+                >
+                  {switchingAccount ? 'Starting sign-in...' : 'Change account'}
+                </button>
+                {grokLogin?.status === 'waiting' && (
+                  <div className="grok-login">
+                    <p>Open this link and approve the SuperGrok account you want to use.</p>
+                    {grokLogin.verification_url ? (
+                      <a href={grokLogin.verification_url} target="_blank" rel="noreferrer">
+                        {grokLogin.verification_url}
+                      </a>
+                    ) : (
+                      <p className="form-hint">Waiting for the sign-in code...</p>
+                    )}
+                    {grokLogin.user_code && <p className="grok-login__code">Code: {grokLogin.user_code}</p>}
+                  </div>
+                )}
+                {grokLogin?.status === 'approved' && (
+                  <p className="api-keys-test-result api-keys-test-result--success">
+                    <CheckCircle2 size={16} /> Signed in{grokLogin.account ? ` as ${grokLogin.account}` : ''}.
+                  </p>
+                )}
+              </div>
+            ) : (
             <div className="form-group">
               <label className="form-label">
                 Grok API Key
@@ -301,8 +397,10 @@ export function ApiKeysPage() {
                 </button>
               </div>
             </div>
+            )}
 
             <div className="api-keys-grid-3">
+              {grokMode === 'api' && (
               <div className="form-group">
                 <label className="form-label">Base URL</label>
                 <input
@@ -313,13 +411,14 @@ export function ApiKeysPage() {
                   onChange={(e) => setGrokBaseUrl(e.target.value)}
                 />
               </div>
+              )}
 
               <div className="form-group">
                 <label className="form-label">Primary Reasoning Model</label>
                 <input
                   type="text"
                   className="input"
-                  placeholder="grok-4.6 or grok-beta"
+                  placeholder="grok-4.7 or grok-4.6"
                   value={grokModelPrimary}
                   onChange={(e) => setGrokModelPrimary(e.target.value)}
                 />
@@ -330,7 +429,7 @@ export function ApiKeysPage() {
                 <input
                   type="text"
                   className="input"
-                  placeholder="grok-4.5 or grok-2-mini"
+                  placeholder="grok-4.5"
                   value={grokModelFast}
                   onChange={(e) => setGrokModelFast(e.target.value)}
                 />

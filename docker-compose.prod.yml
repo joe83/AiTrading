@@ -67,7 +67,23 @@ services:
       - internal-net
 
   # ----------------------------------------------------------------------------
-  # 3. Server: Rust Backend (REST API + WebSocket + Grok AI + Exchange Connectors)
+  # 3. SuperGrok proxy: subscription login, private to the Docker network
+  # ----------------------------------------------------------------------------
+  grok-proxy:
+    build:
+      context: ./docker/grok-proxy
+      dockerfile: Dockerfile
+    container_name: grok-proxy
+    restart: always
+    environment:
+      GROK_PROXY_HOME: /data
+    volumes:
+      - grokdata:/data
+    networks:
+      - public-net
+
+  # ----------------------------------------------------------------------------
+  # 4. Server: Rust Backend (REST API + WebSocket + Grok AI + Exchange Connectors)
   # ----------------------------------------------------------------------------
   server:
     build:
@@ -80,6 +96,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      grok-proxy:
+        condition: service_started
     env_file:
       - ./server/.env
     environment:
@@ -103,7 +121,7 @@ services:
       - public-net
 
   # ----------------------------------------------------------------------------
-  # 4. Web: React 19 + TypeScript Web Dashboard (Static files)
+  # 5. Web: React 19 + TypeScript Web Dashboard (Static files)
   # ----------------------------------------------------------------------------
   web:
     build:
@@ -115,14 +133,14 @@ services:
       - internal-net
 
   # ----------------------------------------------------------------------------
-  # 5. Gateway: Nginx Reverse Proxy (Rate-Limiting, WebSockets, SPA)
+  # 6. Gateway: Nginx Reverse Proxy (Rate-Limiting, WebSockets, SPA)
   # ----------------------------------------------------------------------------
   nginx:
     image: nginx:alpine
     container_name: aitrading-nginx
     restart: always
     ports:
-      - "8088:80"
+      - "80:80"
     volumes:
       - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
@@ -135,6 +153,8 @@ services:
 
 volumes:
   pgdata:
+    driver: local
+  grokdata:
     driver: local
 
 networks:

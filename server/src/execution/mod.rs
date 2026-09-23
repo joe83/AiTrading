@@ -5,6 +5,7 @@ use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::config::TradingConfig;
+use crate::db::{Database, TradeInsert};
 use crate::exchange::Exchange;
 use crate::models::*;
 use crate::risk::{PositionAlert, RiskManager};
@@ -20,6 +21,7 @@ pub struct ExecutionEngine {
     trade_history: Arc<RwLock<Vec<TradeRecord>>>,
     /// Optional exchange manager reference to verify exchange auto-trading enablement.
     exchange_manager: Arc<RwLock<Option<Arc<crate::exchange::manager::ExchangeManager>>>>,
+    db: Arc<Database>,
 }
 
 /// Record of an executed trade for performance tracking.
@@ -49,7 +51,7 @@ pub enum TradingMode {
 }
 
 impl ExecutionEngine {
-    pub fn new(risk_manager: Arc<RiskManager>, config: &TradingConfig) -> Self {
+    pub fn new(risk_manager: Arc<RiskManager>, config: &TradingConfig, db: Arc<Database>) -> Self {
         let mode = match config.mode {
             crate::config::TradingMode::Auto => TradingMode::Auto,
             crate::config::TradingMode::Manual => TradingMode::Manual,
@@ -61,6 +63,7 @@ impl ExecutionEngine {
             pending_signals: Arc::new(RwLock::new(Vec::new())),
             trade_history: Arc::new(RwLock::new(Vec::new())),
             exchange_manager: Arc::new(RwLock::new(None)),
+            db,
         }
     }
 
@@ -217,6 +220,7 @@ impl ExecutionEngine {
         };
 
         self.trade_history.write().await.push(record.clone());
+        self.persist_open_trade(&signal, &record).await;
 
         info!(
             "Trade executed: {} {} {} @ {} (order: {})",
@@ -238,58 +242,10 @@ impl ExecutionEngine {
     ) -> Result<()> {
         match alert {
             PositionAlert::StopLossHit(position) => {
-                warn!(
-                    "STOP LOSS HIT: {} {} @ {} (entry: {})",
-                    position.symbol,
-                    match position.side { OrderSide::Buy => "LONG", OrderSide::Sell => "SHORT" },
-                    position.current_price,
-                    position.entry_price
-                );
-
-                // Close position at market
-                let close_side = match position.side {
-                    OrderSide::Buy => OrderSide::Sell,
-                    OrderSide::Sell => OrderSide::Buy,
-                };
-
-                let close_order = Order::market(
-                    position.exchange,
-                    &position.symbol,
-                    close_side,
-                    position.quantity,
-                );
-
-                exchange.place_order(&close_order).await?;
-                self.risk_manager
-                    .remove_position(position.id, position.unrealized_pnl)
-                    .await;
+                self.close_position_on_exchange(position, exchange, "stop_loss").await?;
             }
             PositionAlert::TakeProfitHit(position) => {
-                info!(
-                    "TAKE PROFIT HIT: {} {} @ {} (entry: {}, P&L: {})",
-                    position.symbol,
-                    match position.side { OrderSide::Buy => "LONG", OrderSide::Sell => "SHORT" },
-                    position.current_price,
-                    position.entry_price,
-                    position.unrealized_pnl
-                );
-
-                let close_side = match position.side {
-                    OrderSide::Buy => OrderSide::Sell,
-                    OrderSide::Sell => OrderSide::Buy,
-                };
-
-                let close_order = Order::market(
-                    position.exchange,
-                    &position.symbol,
-                    close_side,
-                    position.quantity,
-                );
-
-                exchange.place_order(&close_order).await?;
-                self.risk_manager
-                    .remove_position(position.id, position.unrealized_pnl)
-                    .await;
+                self.close_position_on_exchange(position, exchange, "take_profit").await?;
             }
             PositionAlert::TrailingStopUpdated(position) => {
                 info!(
@@ -300,6 +256,123 @@ impl ExecutionEngine {
             }
         }
         Ok(())
+    }
+
+    async fn persist_open_trade(&self, signal: &TradingSignal, record: &TradeRecord) {
+        if let Err(e) = self.db.insert_signal(signal).await {
+            warn!("Failed to persist signal {} before trade: {e}", signal.id);
+        }
+        if let Err(e) = self.db.mark_signal_executed(signal.id).await {
+            warn!("Failed to mark signal {} executed: {e}", signal.id);
+        }
+        let insert = TradeInsert {
+            id: record.id,
+            exchange: record.exchange,
+            symbol: record.symbol.clone(),
+            side: record.side,
+            quantity: record.quantity,
+            entry_price: record.entry_price,
+            fees: record.fees,
+            signal_id: record.signal_id,
+            signal_confidence: record.signal_confidence,
+            opened_at: record.opened_at,
+        };
+        if let Err(e) = self.db.insert_trade(&insert).await {
+            warn!("Failed to persist open trade {}: {e}", record.id);
+        }
+    }
+
+    async fn close_position_on_exchange(
+        &self,
+        position: Position,
+        exchange: &dyn Exchange,
+        reason: &str,
+    ) -> Result<()> {
+        let side_label = match position.side {
+            OrderSide::Buy => "LONG",
+            OrderSide::Sell => "SHORT",
+        };
+        let close_side = match position.side {
+            OrderSide::Buy => OrderSide::Sell,
+            OrderSide::Sell => OrderSide::Buy,
+        };
+        let close_order = Order::market(
+            position.exchange,
+            &position.symbol,
+            close_side,
+            position.quantity,
+        );
+        let result = exchange.place_order(&close_order).await?;
+        let exit_price = result.average_fill_price.unwrap_or(position.current_price);
+        let pnl = realized_pnl(&position, exit_price);
+
+        match reason {
+            "stop_loss" => warn!(
+                "STOP LOSS HIT: {} {} @ {} (entry: {}, P&L: {})",
+                position.symbol, side_label, exit_price, position.entry_price, pnl
+            ),
+            _ => info!(
+                "TAKE PROFIT HIT: {} {} @ {} (entry: {}, P&L: {})",
+                position.symbol, side_label, exit_price, position.entry_price, pnl
+            ),
+        }
+
+        self.risk_manager.remove_position(position.id, pnl).await;
+        self.mark_trade_closed(&position, exit_price, pnl, reason).await;
+        Ok(())
+    }
+
+    async fn mark_trade_closed(
+        &self,
+        position: &Position,
+        exit_price: Decimal,
+        pnl: Decimal,
+        reason: &str,
+    ) {
+        let closed_at = chrono::Utc::now();
+        {
+            let mut history = self.trade_history.write().await;
+            if let Some(record) = history.iter_mut().rev().find(|trade| {
+                trade.closed_at.is_none()
+                    && trade.symbol == position.symbol
+                    && trade.exchange == position.exchange
+                    && position
+                        .signal_id
+                        .map(|id| trade.signal_id == id)
+                        .unwrap_or(true)
+            }) {
+                record.exit_price = Some(exit_price);
+                record.fees = position.fees_paid;
+                record.realized_pnl = Some(pnl);
+                record.closed_at = Some(closed_at);
+                record.close_reason = Some(reason.to_string());
+            }
+        }
+
+        match self
+            .db
+            .close_open_trade(
+                position.exchange,
+                &position.symbol,
+                position.signal_id,
+                exit_price,
+                position.fees_paid,
+                pnl,
+                reason,
+                closed_at,
+            )
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => warn!(
+                "No open trade row to close for {} on {}",
+                position.symbol, position.exchange
+            ),
+            Err(e) => warn!(
+                "Failed to persist closed trade for {} on {}: {e}",
+                position.symbol, position.exchange
+            ),
+        }
     }
 
     /// Approve a pending signal (manual mode).
@@ -324,6 +397,22 @@ impl ExecutionEngine {
     }
 
     /// Get all pending signals.
+    /// Show a signal on the dashboard. Does not place an order.
+    pub async fn queue_for_review(&self, signal: TradingSignal) {
+        info!(
+            "Signal queued for review: {} {:?} (confidence: {:.1}%)",
+            signal.symbol,
+            signal.action,
+            signal.confidence * 100.0
+        );
+        let mut pending = self.pending_signals.write().await;
+        pending.push(signal);
+        if pending.len() > 50 {
+            let overflow = pending.len() - 50;
+            pending.drain(0..overflow);
+        }
+    }
+
     pub async fn get_pending_signals(&self) -> Vec<TradingSignal> {
         self.pending_signals.read().await.clone()
     }
@@ -343,6 +432,14 @@ impl ExecutionEngine {
     pub async fn get_mode(&self) -> TradingMode {
         self.trading_mode.read().await.clone()
     }
+}
+
+fn realized_pnl(position: &Position, exit_price: Decimal) -> Decimal {
+    let price_diff = match position.side {
+        OrderSide::Buy => exit_price - position.entry_price,
+        OrderSide::Sell => position.entry_price - exit_price,
+    };
+    price_diff * position.quantity - position.fees_paid
 }
 
 /// Result of processing a signal.

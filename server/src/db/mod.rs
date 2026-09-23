@@ -1,9 +1,16 @@
+mod journal;
+
 use anyhow::Result;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tracing::info;
 
 use crate::config::DatabaseConfig;
+
+pub use journal::{
+    format_playbook, normalize_scope, PerformanceFigures, PlaybookEntry, PlaybookRule, PromoteLesson,
+    TradeInsert, TradeRow,
+};
 
 /// Database connection pool and query helpers.
 pub struct Database {

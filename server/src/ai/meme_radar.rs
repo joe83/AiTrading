@@ -169,7 +169,14 @@ Respond strictly with valid JSON conforming to this schema:
 
         let response = self
             .grok
-            .chat_json(vec![system_prompt, user_prompt], true, Some(0.3), Some(1500))
+            .chat_json(
+                vec![system_prompt, user_prompt],
+                true,
+                Some(0.3),
+                Some(2048),
+                "low",
+                Some(10),
+            )
             .await
             .context("Failed Grok completion for meme radar")?;
 

@@ -13,9 +13,10 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci || npm install
 
-# Copy source code and build
+# Copy source code and build. Drop the local .env so the production bundle
+# calls the same host that served the page, not localhost:8080.
 COPY . .
-RUN npm run build
+RUN rm -f .env .env.local .env.production && npm run build
 
 # ------------------------------------------------------------------------------
 # Stage 2: Serve with Nginx Alpine

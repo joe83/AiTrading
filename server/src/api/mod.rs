@@ -1,3 +1,7 @@
+mod agent;
+mod lessons;
+mod mcp;
+mod watch;
 pub mod websocket;
 
 use crate::backtest::{BacktestConfig, BacktestEngine};
@@ -65,6 +69,16 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         // Settings & Control
         .route("/api/settings/mode", post(set_trading_mode))
         .route("/api/settings/mode", get(get_trading_mode))
+        .route("/api/playbook", get(list_playbook))
+        .route("/api/playbook", post(create_playbook_rule))
+        .route("/api/agent/chat", post(agent::agent_chat))
+        .route("/api/watch", get(watch::watch_status))
+        .route("/api/grok/account", get(watch::grok_account))
+        .route("/api/grok/login", get(watch::grok_login_status).post(watch::grok_login_start))
+        .route("/api/lessons", get(lessons::list_lessons))
+        .route("/api/lessons/:id/approve", post(lessons::approve_lesson))
+        .route("/api/lessons/:id/reject", post(lessons::reject_lesson))
+        .route("/api/mcp", post(mcp::mcp_http))
         .route("/api/settings/api-keys", get(get_api_keys))
         .route("/api/settings/api-keys", post(update_api_keys))
         .route("/api/settings/api-keys/test", post(test_api_key))
@@ -274,6 +288,88 @@ async fn set_trading_mode(
 async fn get_trading_mode(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let mode = state.execution_engine.get_mode().await;
     Json(serde_json::json!({ "mode": format!("{:?}", mode) }))
+}
+
+#[derive(Deserialize)]
+struct CreatePlaybookRequest {
+    scope: String,
+    rule: String,
+    #[serde(default)]
+    sample_size: i32,
+    #[serde(default)]
+    evidence_trade_ids: Vec<uuid::Uuid>,
+}
+
+async fn list_playbook(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    match state.db.list_playbook().await {
+        Ok(rules) => Ok(Json(serde_json::json!({
+            "rules": rules.into_iter().map(|rule| serde_json::json!({
+                "id": rule.id,
+                "lesson_id": rule.lesson_id,
+                "scope": rule.scope,
+                "rule": rule.rule,
+                "sample_size": rule.sample_size,
+                "created_at": rule.created_at,
+            })).collect::<Vec<_>>()
+        }))),
+        Err(e) => {
+            tracing::error!("Failed to list playbook: {e}");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+async fn create_playbook_rule(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreatePlaybookRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+    let scope = req.scope.trim();
+    let rule = req.rule.trim();
+    if scope.is_empty() || scope.chars().count() > 64 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "scope must be 1-64 characters" })),
+        ));
+    }
+    if rule.is_empty() || rule.chars().count() > 2000 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "rule must be 1-2000 characters" })),
+        ));
+    }
+    if req.sample_size < 0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "sample_size must be zero or greater" })),
+        ));
+    }
+
+    match state
+        .db
+        .approve_playbook_rule(scope, rule, req.sample_size, &req.evidence_trade_ids)
+        .await
+    {
+        Ok((lesson_id, playbook_id)) => Ok((
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "lesson_id": lesson_id,
+                "id": playbook_id,
+                "scope": crate::db::normalize_scope(scope),
+                "rule": rule,
+                "sample_size": req.sample_size,
+                "status": "supported",
+            })),
+        )),
+        Err(e) => {
+            tracing::error!("Failed to save playbook rule: {e}");
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "failed to save playbook rule" })),
+            ))
+        }
+    }
 }
 
 async fn pause_trading(State(_state): State<Arc<AppState>>) -> Json<serde_json::Value> {
@@ -526,6 +622,9 @@ pub struct GrokKeyStatus {
     pub base_url: String,
     pub model_primary: String,
     pub model_fast: String,
+    /// `api` uses the xAI API key. `proxy` uses the SuperGrok login.
+    pub mode: String,
+    pub proxy_account: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -579,6 +678,8 @@ pub struct BybitKeyStatus {
 pub struct UpdateApiKeysRequest {
     pub grok_api_key: Option<String>,
     pub grok_base_url: Option<String>,
+    /// `api` or `proxy`.
+    pub grok_mode: Option<String>,
     pub grok_model_primary: Option<String>,
     pub grok_model_fast: Option<String>,
 
@@ -622,6 +723,17 @@ pub struct TestApiKeyResponse {
 }
 
 async fn get_api_keys(State(state): State<Arc<AppState>>) -> Json<ApiKeysStatus> {
+    let live_base = state.ai_engine.grok.get_base_url();
+    let grok_mode = if crate::api::watch::is_proxy_url(&live_base) {
+        "proxy"
+    } else {
+        "api"
+    };
+    let proxy_account = if grok_mode == "proxy" {
+        crate::api::watch::current_account().await
+    } else {
+        None
+    };
     let cfg = state.config.read().await;
     let grok_key = state.ai_engine.grok.get_api_key();
     let grok_primary = state.ai_engine.grok.get_model_primary();
@@ -637,9 +749,11 @@ async fn get_api_keys(State(state): State<Arc<AppState>>) -> Json<ApiKeysStatus>
         grok: GrokKeyStatus {
             is_set: !grok_key.is_empty(),
             masked_key: mask_secret(&grok_key),
-            base_url: cfg.grok.base_url.clone(),
+            base_url: live_base,
             model_primary: grok_primary,
             model_fast: grok_fast,
+            mode: grok_mode.to_string(),
+            proxy_account,
         },
         mexc: MexcKeyStatus {
             is_set: !cfg.mexc.api_key.is_empty(),
@@ -689,7 +803,20 @@ async fn update_api_keys(
 
     // 1. Grok updates
     let grok_key = req.grok_api_key.filter(|s| !s.trim().is_empty());
-    let grok_base = req.grok_base_url.filter(|s| !s.trim().is_empty());
+    let mut grok_base = req.grok_base_url.filter(|s| !s.trim().is_empty());
+    if let Some(mode) = req.grok_mode.as_deref().map(str::trim) {
+        grok_base = Some(match mode {
+            "proxy" => crate::api::watch::proxy_base_url(),
+            _ => {
+                let requested = grok_base.unwrap_or_default();
+                if requested.is_empty() || crate::api::watch::is_proxy_url(&requested) {
+                    "https://api.x.ai/v1".to_string()
+                } else {
+                    requested
+                }
+            }
+        });
+    }
     let grok_primary = req.grok_model_primary.filter(|s| !s.trim().is_empty());
     let grok_fast = req.grok_model_fast.filter(|s| !s.trim().is_empty());
 

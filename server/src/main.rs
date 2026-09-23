@@ -11,7 +11,7 @@ mod execution;
 mod models;
 mod risk;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -23,6 +23,7 @@ use crate::ai::AiEngine;
 use crate::api::websocket::WsBroadcast;
 use crate::backtest::BacktestResult;
 use crate::config::AppConfig;
+use crate::db::Database;
 use crate::exchange::manager::ExchangeManager;
 use crate::execution::ExecutionEngine;
 use crate::models::*;
@@ -35,12 +36,15 @@ pub struct AppState {
     pub risk_manager: Arc<RiskManager>,
     pub execution_engine: ExecutionEngine,
     pub exchange_manager: Arc<ExchangeManager>,
+    pub db: Arc<Database>,
     /// Broadcast channel for WebSocket clients.
     pub ws_broadcast: broadcast::Sender<WsBroadcast>,
     /// Latest analysis results per symbol.
     pub latest_analyses: RwLock<HashMap<String, AnalysisResult>>,
     /// Signal history.
     pub signal_history: RwLock<Vec<TradingSignal>>,
+    /// Latest X watcher status for the dashboard.
+    pub watch_status: RwLock<crate::ai::watch_loop::WatchStatus>,
     /// Backtest results history.
     pub backtest_results: RwLock<Vec<BacktestResult>>,
     /// Server start time.
@@ -73,16 +77,27 @@ async fn main() -> Result<()> {
     info!("   Max position size: {}%", config.trading.max_position_size_pct);
     info!("   Max daily loss: {}%", config.trading.max_daily_loss_pct);
 
+    let database = Arc::new(
+        Database::connect(&config.database)
+            .await
+            .context("Failed to connect to the trading database")?,
+    );
+    database
+        .run_migrations()
+        .await
+        .context("Database migrations failed")?;
+    info!("✅ Database ready");
+
     // Initialize risk manager
     let risk_manager = Arc::new(RiskManager::new(&config.trading));
     info!("✅ Risk manager initialized");
 
     // Initialize execution engine
-    let execution_engine = ExecutionEngine::new(risk_manager.clone(), &config.trading);
+    let execution_engine = ExecutionEngine::new(risk_manager.clone(), &config.trading, database.clone());
     info!("✅ Execution engine initialized");
 
     // Initialize AI engine
-    let ai_engine = AiEngine::new(&config);
+    let ai_engine = AiEngine::new(&config, database.clone());
     info!("✅ AI engine initialized (Grok API ready)");
 
     // Initialize exchange manager
@@ -137,9 +152,11 @@ async fn main() -> Result<()> {
         risk_manager: risk_manager.clone(),
         execution_engine,
         exchange_manager: exchange_manager.clone(),
+        db: database,
         ws_broadcast: ws_broadcast.clone(),
         latest_analyses: RwLock::new(HashMap::new()),
         signal_history: RwLock::new(Vec::new()),
+        watch_status: RwLock::new(crate::ai::watch_loop::WatchStatus::default()),
         backtest_results: RwLock::new(Vec::new()),
         start_time: Instant::now(),
     });
@@ -181,11 +198,17 @@ async fn main() -> Result<()> {
     info!("   Health:     http://{}:{}/api/health", config.server.host, config.server.port);
     info!("═══════════════════════════════════════════════════════════");
 
+    let watch_state = state.clone();
+    let watch_handle = tokio::spawn(async move {
+        crate::ai::watch_loop::run(watch_state).await;
+    });
+
     // Wait for shutdown signal
     tokio::signal::ctrl_c().await?;
     info!("🛑 Shutdown signal received. Cleaning up...");
 
     // Graceful shutdown
+    watch_handle.abort();
     api_handle.abort();
     ws_handle.abort();
 

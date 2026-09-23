@@ -21,7 +21,8 @@ This guide details the end-to-end process of setting up, hardening, and deployin
 The production deployment runs via Docker Compose in an isolated network architecture:
 
 - **Gateway / Reverse Proxy (Nginx)**: Listens on ports `80` (HTTP) and `443` (HTTPS). Terminates TLS, enforces rate-limiting on login routes, manages WebSocket upgrade handshakes, and serves the frontend SPA.
-- **Backend (Rust Server)**: Axum REST API (port `8080`) and WebSocket server (port `8081`). Connects asynchronously to Grok (xAI), MEXC, Alpaca, and IC Markets.
+- **Backend (Rust Server)**: Axum REST API (port `8080`) and WebSocket server (port `8081`). Connects asynchronously to Grok, MEXC, Alpaca, and IC Markets.
+- **SuperGrok proxy**: Private container on the Docker network. It holds one SuperGrok login and forwards chat and X search to xAI. No host port is published.
 - **Frontend (React 19 + TypeScript)**: Compiled static Single Page Application served with gzip/brotli caching.
 - **Database (TimescaleDB / PostgreSQL 16)**: Time-series database optimized for tick and candlestick storage, automated hypertable compression, and retention.
 - **Cache (Redis 7 Alpine)**: Fast in-memory cache and pub/sub.
@@ -70,6 +71,30 @@ sudo DOMAIN="trade.yourdomain.com" \
      XAI_API_KEY="your_actual_xai_key" \
      ./install.sh
 ```
+
+`GROK_MODE` chooses the Grok connection written into `server/.env`:
+
+| `GROK_MODE` | When | `XAI_BASE_URL` |
+| :--- | :--- | :--- |
+| `proxy` (default if `XAI_API_KEY` is empty) | SuperGrok subscription on this server | `http://grok-proxy:8585/v1` |
+| `api` (default if `XAI_API_KEY` is set) | Metered key from console.x.ai | `https://api.x.ai/v1` |
+
+A bare IP install keeps the dashboard on same-origin HTTP (`VITE_API_URL` empty). A domain install still serves the API through Nginx. The production web image ignores `web/.env`, so the browser never calls `localhost`.
+
+### Grok connection and the watcher
+
+API Keys in the dashboard switches between the SuperGrok proxy and the xAI API key and saves that choice. **Change account** starts a device login. Approve it in a browser with the SuperGrok account that should pay for the calls.
+
+The Watcher menu scans `@elonmusk` and `@realDonaldTrump` every 60 seconds. Handles, confidence, and age are `WATCH_HANDLES`, `WATCH_MIN_CONFIDENCE`, and `WATCH_MAX_POST_AGE_SECS` in `server/.env`. A match is queued for review. Trading mode stays manual, so nothing is sent to an exchange until you approve it.
+
+Sign in from the server shell if the dashboard is not up yet:
+
+```bash
+docker exec -it grok-proxy grok-proxy login --no-browser
+```
+
+The login file lives in the `grokdata` volume. Redeploying the stack does not delete it.
+
 
 ---
 

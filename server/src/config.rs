@@ -15,6 +15,7 @@ pub struct AppConfig {
     pub jwt: JwtConfig,
     pub auth: AuthConfig,
     pub trading: TradingConfig,
+    pub watch: WatchConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +108,17 @@ pub struct TradingConfig {
     pub default_take_profit_pct: f64,
     pub analysis_interval_secs: u64,
     pub sentiment_check_interval_secs: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct WatchConfig {
+    pub enabled: bool,
+    pub interval_secs: u64,
+    /// X handles without the @ sign.
+    pub handles: Vec<String>,
+    pub min_confidence: f64,
+    /// Posts older than this are marked seen and not queued.
+    pub max_post_age_secs: i64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -214,6 +226,24 @@ impl AppConfig {
                 sentiment_check_interval_secs: env_var_or("SENTIMENT_CHECK_INTERVAL_SECS", "300")
                     .parse()
                     .context("Invalid SENTIMENT_CHECK_INTERVAL_SECS")?,
+            },
+            watch: WatchConfig {
+                enabled: env_var_or("WATCH_ENABLED", "true") != "false",
+                interval_secs: env_var_or("WATCH_INTERVAL_SECS", "60")
+                    .parse()
+                    .context("Invalid WATCH_INTERVAL_SECS")?,
+                handles: env_var_or("WATCH_HANDLES", "elonmusk,realDonaldTrump")
+                    .split(',')
+                    .map(|handle| handle.trim().trim_start_matches('@').to_string())
+                    .filter(|handle| !handle.is_empty())
+                    .take(20)
+                    .collect(),
+                min_confidence: env_var_or("WATCH_MIN_CONFIDENCE", "0.7")
+                    .parse()
+                    .context("Invalid WATCH_MIN_CONFIDENCE")?,
+                max_post_age_secs: env_var_or("WATCH_MAX_POST_AGE_SECS", "600")
+                    .parse()
+                    .context("Invalid WATCH_MAX_POST_AGE_SECS")?,
             },
         })
     }

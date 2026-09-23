@@ -1,0 +1,227 @@
+.agent-page__error {
+  margin-bottom: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--color-loss-bg);
+  color: var(--color-loss);
+  font-size: var(--text-sm);
+}
+
+.agent-page__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.agent-page__thread {
+  display: flex;
+  flex-direction: column;
+  min-height: 520px;
+  height: calc(100vh - 250px);
+  padding: 0;
+  overflow: hidden;
+}
+
+.agent-page__thread.card:hover {
+  background: var(--bg-card);
+}
+
+.agent-page__log {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.agent-page__empty {
+  margin: auto;
+  max-width: 460px;
+  text-align: center;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.agent-page__starters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.agent-page__starters .btn {
+  white-space: normal;
+  text-align: left;
+  justify-content: flex-start;
+}
+
+.agent-page__item--user {
+  align-self: flex-end;
+  max-width: min(70%, 560px);
+  background: var(--accent-primary-dim);
+  border: 1px solid var(--border-active);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+}
+
+.agent-page__item--assistant {
+  align-self: flex-start;
+  max-width: min(80%, 640px);
+  color: var(--text-primary);
+}
+
+.agent-page__item p {
+  white-space: pre-wrap;
+  line-height: 1.5;
+  font-size: var(--text-sm);
+}
+
+.agent-page__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+}
+
+.agent-page__chip--bad {
+  color: var(--color-loss);
+  background: var(--color-loss-bg);
+}
+
+.agent-page__spin {
+  animation: agent-spin 0.8s linear infinite;
+}
+
+@keyframes agent-spin {
+  to { transform: rotate(360deg); }
+}
+
+.agent-page__composer {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-end;
+  padding: var(--space-4);
+  border-top: 1px solid var(--border-primary);
+}
+
+.agent-page__input {
+  flex: 1;
+  resize: none;
+  min-height: 52px;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-secondary);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.agent-page__input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.agent-page__panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.agent-page__panel-note,
+.agent-page__mcp,
+.agent-page__panel-empty {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  line-height: 1.45;
+}
+
+.agent-page__mcp code {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+.agent-page__lessons {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.agent-page__lesson {
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.agent-page__lesson p {
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  line-height: 1.45;
+}
+
+.agent-page__lesson-meta,
+.agent-page__sample {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+}
+
+.agent-page__lesson--supported {
+  border: 1px solid rgba(0, 230, 118, 0.35);
+}
+
+.agent-page__lesson--rejected {
+  opacity: 0.6;
+}
+
+.agent-page__lesson-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.agent-page__lesson-actions .btn {
+  flex: 1;
+  padding: var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.agent-page__lesson-actions .btn:disabled,
+.agent-page__composer .btn:disabled,
+.agent-page__starters .btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (max-width: 900px) {
+  .agent-page__layout {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-page__thread {
+    height: auto;
+    min-height: 420px;
+  }
+
+  .agent-page__item--user,
+  .agent-page__item--assistant {
+    max-width: 100%;
+  }
+}

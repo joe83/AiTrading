@@ -1,9 +1,16 @@
 -- AI Trading Platform - Database Schema
 -- Uses TimescaleDB for time-series data optimization
 
--- Enable required extensions
+-- Enable required extensions. TimescaleDB is optional so a plain PostgreSQL
+-- install can still boot; hypertables are applied only when it is present.
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS timescaledb;
+
+DO $$
+BEGIN
+    CREATE EXTENSION IF NOT EXISTS timescaledb;
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'TimescaleDB is not installed; candles stay regular tables (%).', SQLERRM;
+END $$;
 
 -- ============================================================================
 -- CANDLES (OHLCV historical data) — Core time-series table
@@ -22,12 +29,22 @@ CREATE TABLE IF NOT EXISTS candles (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Convert to TimescaleDB hypertable — this is the key optimization
--- Automatically partitions data by time (default 7-day chunks)
-SELECT create_hypertable('candles', 'open_time',
-    chunk_time_interval => INTERVAL '7 days',
-    if_not_exists => TRUE
-);
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') THEN
+        PERFORM create_hypertable('candles', 'open_time',
+            chunk_time_interval => INTERVAL '7 days',
+            if_not_exists => TRUE
+        );
+        EXECUTE 'ALTER TABLE candles SET (
+            timescaledb.compress,
+            timescaledb.compress_segmentby = ''symbol, exchange, timeframe'',
+            timescaledb.compress_orderby = ''open_time DESC''
+        )';
+        PERFORM add_compression_policy('candles', INTERVAL '7 days', if_not_exists => TRUE);
+        PERFORM add_retention_policy('candles', INTERVAL '365 days', if_not_exists => TRUE);
+    END IF;
+END $$;
 
 -- Composite index for the most common query: candles for a symbol + timeframe
 CREATE INDEX IF NOT EXISTS idx_candles_symbol_tf_time
@@ -37,72 +54,60 @@ CREATE INDEX IF NOT EXISTS idx_candles_symbol_tf_time
 CREATE UNIQUE INDEX IF NOT EXISTS idx_candles_unique
     ON candles (symbol, exchange, timeframe, open_time);
 
--- Enable TimescaleDB compression on candles older than 7 days
--- Compresses storage ~90%, critical for storing millions of candles
-ALTER TABLE candles SET (
-    timescaledb.compress,
-    timescaledb.compress_segmentby = 'symbol, exchange, timeframe',
-    timescaledb.compress_orderby = 'open_time DESC'
-);
-
-SELECT add_compression_policy('candles', INTERVAL '7 days', if_not_exists => TRUE);
-
--- Auto-delete candles older than 1 year (configurable)
-SELECT add_retention_policy('candles', INTERVAL '365 days', if_not_exists => TRUE);
-
--- ============================================================================
--- CONTINUOUS AGGREGATES — Pre-computed rollups for fast dashboard/charting
--- ============================================================================
-
--- Hourly OHLCV summary (refreshes every 5 minutes)
-CREATE MATERIALIZED VIEW IF NOT EXISTS candles_1h
-WITH (timescaledb.continuous) AS
-SELECT
-    time_bucket('1 hour', open_time) AS bucket,
-    symbol,
-    exchange,
-    FIRST(open, open_time) AS open,
-    MAX(high) AS high,
-    MIN(low) AS low,
-    LAST(close, open_time) AS close,
-    SUM(volume) AS volume,
-    COUNT(*) AS candle_count
-FROM candles
-WHERE timeframe = '1m' OR timeframe = '5m'
-GROUP BY bucket, symbol, exchange
-WITH NO DATA;
-
-SELECT add_continuous_aggregate_policy('candles_1h',
-    start_offset => INTERVAL '3 hours',
-    end_offset => INTERVAL '1 hour',
-    schedule_interval => INTERVAL '5 minutes',
-    if_not_exists => TRUE
-);
-
--- Daily OHLCV summary (refreshes every 30 minutes)
-CREATE MATERIALIZED VIEW IF NOT EXISTS candles_1d
-WITH (timescaledb.continuous) AS
-SELECT
-    time_bucket('1 day', open_time) AS bucket,
-    symbol,
-    exchange,
-    FIRST(open, open_time) AS open,
-    MAX(high) AS high,
-    MIN(low) AS low,
-    LAST(close, open_time) AS close,
-    SUM(volume) AS volume,
-    COUNT(*) AS candle_count
-FROM candles
-WHERE timeframe = '1h' OR timeframe = '1m'
-GROUP BY bucket, symbol, exchange
-WITH NO DATA;
-
-SELECT add_continuous_aggregate_policy('candles_1d',
-    start_offset => INTERVAL '3 days',
-    end_offset => INTERVAL '1 day',
-    schedule_interval => INTERVAL '30 minutes',
-    if_not_exists => TRUE
-);
+-- Hourly and daily rollups exist only when TimescaleDB is installed.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') THEN
+        EXECUTE $view$
+            CREATE MATERIALIZED VIEW IF NOT EXISTS candles_1h
+            WITH (timescaledb.continuous) AS
+            SELECT
+                time_bucket('1 hour', open_time) AS bucket,
+                symbol,
+                exchange,
+                FIRST(open, open_time) AS open,
+                MAX(high) AS high,
+                MIN(low) AS low,
+                LAST(close, open_time) AS close,
+                SUM(volume) AS volume,
+                COUNT(*) AS candle_count
+            FROM candles
+            WHERE timeframe = '1m' OR timeframe = '5m'
+            GROUP BY bucket, symbol, exchange
+            WITH NO DATA
+        $view$;
+        PERFORM add_continuous_aggregate_policy('candles_1h',
+            start_offset => INTERVAL '3 hours',
+            end_offset => INTERVAL '1 hour',
+            schedule_interval => INTERVAL '5 minutes',
+            if_not_exists => TRUE
+        );
+        EXECUTE $view$
+            CREATE MATERIALIZED VIEW IF NOT EXISTS candles_1d
+            WITH (timescaledb.continuous) AS
+            SELECT
+                time_bucket('1 day', open_time) AS bucket,
+                symbol,
+                exchange,
+                FIRST(open, open_time) AS open,
+                MAX(high) AS high,
+                MIN(low) AS low,
+                LAST(close, open_time) AS close,
+                SUM(volume) AS volume,
+                COUNT(*) AS candle_count
+            FROM candles
+            WHERE timeframe = '1h' OR timeframe = '1m'
+            GROUP BY bucket, symbol, exchange
+            WITH NO DATA
+        $view$;
+        PERFORM add_continuous_aggregate_policy('candles_1d',
+            start_offset => INTERVAL '3 days',
+            end_offset => INTERVAL '1 day',
+            schedule_interval => INTERVAL '30 minutes',
+            if_not_exists => TRUE
+        );
+    END IF;
+END $$;
 
 -- ============================================================================
 -- TRADE SIGNALS — Generated by AI
@@ -210,22 +215,24 @@ CREATE TABLE IF NOT EXISTS account_snapshots (
     balances JSONB
 );
 
-SELECT create_hypertable('account_snapshots', 'snapshot_at',
-    chunk_time_interval => INTERVAL '30 days',
-    if_not_exists => TRUE
-);
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') THEN
+        PERFORM create_hypertable('account_snapshots', 'snapshot_at',
+            chunk_time_interval => INTERVAL '30 days',
+            if_not_exists => TRUE
+        );
+        EXECUTE 'ALTER TABLE account_snapshots SET (
+            timescaledb.compress,
+            timescaledb.compress_segmentby = ''exchange'',
+            timescaledb.compress_orderby = ''snapshot_at DESC''
+        )';
+        PERFORM add_compression_policy('account_snapshots', INTERVAL '30 days', if_not_exists => TRUE);
+    END IF;
+END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshots_unique
     ON account_snapshots (exchange, snapshot_at);
-
--- Compress snapshots older than 30 days
-ALTER TABLE account_snapshots SET (
-    timescaledb.compress,
-    timescaledb.compress_segmentby = 'exchange',
-    timescaledb.compress_orderby = 'snapshot_at DESC'
-);
-
-SELECT add_compression_policy('account_snapshots', INTERVAL '30 days', if_not_exists => TRUE);
 
 -- ============================================================================
 -- BACKTEST RESULTS — Store backtest runs

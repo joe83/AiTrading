@@ -154,7 +154,7 @@ class AiInsightsScreen extends ConsumerWidget {
                   children: [
                     Container(width: 6, height: 6, decoration: const BoxDecoration(color: AppTheme.primaryGreen, shape: BoxShape.circle)),
                     const SizedBox(width: 6),
-                    const Text('Active · Model: grok-4.6', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+                    const Text('Active · xAI Grok', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
                   ],
                 ),
                 const SizedBox(height: 4),

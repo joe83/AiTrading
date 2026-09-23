@@ -6,6 +6,8 @@ import { DashboardPage } from './pages/DashboardPage';
 import { ChartsPage } from './pages/ChartsPage';
 import { PositionsPage } from './pages/PositionsPage';
 import { SignalsPage } from './pages/SignalsPage';
+import { AgentPage } from './pages/AgentPage';
+import { WatcherPage } from './pages/WatcherPage';
 import { MemeRadarPage } from './pages/MemeRadarPage';
 import { TradeHistoryPage } from './pages/TradeHistoryPage';
 import { BacktestPage } from './pages/BacktestPage';
@@ -45,6 +47,8 @@ export default function App() {
           <Route path="/charts" element={<ChartsPage />} />
           <Route path="/positions" element={<PositionsPage />} />
           <Route path="/signals" element={<SignalsPage />} />
+          <Route path="/agent" element={<AgentPage />} />
+          <Route path="/watcher" element={<WatcherPage />} />
           <Route path="/meme-radar" element={<MemeRadarPage />} />
           <Route path="/trades" element={<TradeHistoryPage />} />
           <Route path="/backtest" element={<BacktestPage />} />

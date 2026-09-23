@@ -19,6 +19,8 @@ pub struct SentimentResult {
     pub news_score: Option<f64>,
     /// Social media sentiment (-1.0 to 1.0).
     pub social_score: Option<f64>,
+    /// Tokens billed for this Grok call. Zero when the result was not produced by the API.
+    pub tokens_used: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -99,8 +101,9 @@ Base your analysis on your knowledge of:
 
         let response = self
             .grok
-            .chat_json(messages, false, Some(0.3), Some(1024))
+            .chat_json(messages, false, Some(0.3), Some(1024), "low", Some(8))
             .await?;
+        let tokens_used = response.tokens_used;
 
         // Parse the JSON response
         let parsed: serde_json::Value = serde_json::from_str(&response.content)
@@ -143,6 +146,7 @@ Base your analysis on your knowledge of:
             themes,
             news_score: parsed["news_sentiment"].as_f64(),
             social_score: parsed["social_sentiment"].as_f64(),
+            tokens_used,
         })
     }
 }
