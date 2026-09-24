@@ -375,7 +375,23 @@ pub async fn process_incoming_post(
 
     // STEP 3 (AI Second): Trigger LLM sentiment & symbol extraction ONLY now!
     info!("🧠 Invoking AI reasoning for unseen post from @{handle} (key: {post_id})");
-    let decision = read_post(state, handle, text).await?;
+    let decision = match read_post(state, handle, text).await {
+        Ok(d) => d,
+        Err(err) => {
+            warn!("AI reasoning error for @{handle}: {err}");
+            return Ok(IngestResult {
+                post_id,
+                handle: handle.to_string(),
+                already_seen: false,
+                is_stale: false,
+                queued: false,
+                symbol: None,
+                side: None,
+                confidence: None,
+                reason: format!("AI evaluation unavailable: {err}"),
+            });
+        }
+    };
     info!(
         "AI evaluation for @{handle}: trade={}, symbol={}, tilt={}, conf={:.2}, reason={}",
         decision.trade, decision.symbol, decision.tilt, decision.confidence, decision.reason
