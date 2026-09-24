@@ -37,6 +37,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/verify", get(auth::verify_token))
         .route("/api/market/candles", get(get_market_candles))
+        .route("/api/watch/ingest", post(watch::watch_ingest))
         .route("/api/health", get(health_check));
 
     // Protected routes — JWT authentication required
@@ -74,6 +75,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/playbook", post(create_playbook_rule))
         .route("/api/agent/chat", post(agent::agent_chat))
         .route("/api/watch", get(watch::watch_status))
+        .route("/api/watch/config", get(watch::get_watch_config).post(watch::update_watch_config))
+        .route("/api/watch/scan", post(watch::watch_scan))
         .route("/api/grok/account", get(watch::grok_account))
         .route("/api/grok/login", get(watch::grok_login_status).post(watch::grok_login_start))
         .route("/api/lessons", get(lessons::list_lessons))

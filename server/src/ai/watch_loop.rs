@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
-use serde::Serialize;
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -12,12 +12,13 @@ use crate::config::WatchConfig;
 use crate::models::{ExchangeId, SignalAction, SignalSource, TradingSignal};
 use crate::AppState;
 
-const MAX_POSTS_PER_TICK: usize = 3;
+const MAX_POSTS_PER_TICK: usize = 5;
 
 /// What the dashboard shows for the sleepless watcher.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatchStatus {
     pub enabled: bool,
+    pub provider: String,
     pub handles: Vec<String>,
     pub interval_secs: u64,
     pub running: bool,
@@ -30,8 +31,9 @@ impl Default for WatchStatus {
     fn default() -> Self {
         Self {
             enabled: false,
+            provider: "webhook".to_string(),
             handles: Vec::new(),
-            interval_secs: 60,
+            interval_secs: 300,
             running: false,
             last_tick_at: None,
             last_result: "Not started".to_string(),
@@ -40,39 +42,71 @@ impl Default for WatchStatus {
     }
 }
 
-/// Poll a fixed list of X accounts and queue a review signal when a new post
-/// still looks early. This loop never places an order.
+/// An incoming post from any ingestion channel (Webhook, Scraper API, or Grok search).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IncomingPost {
+    pub handle: String,
+    pub text: String,
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
+
+/// Result of evaluating an incoming post.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IngestResult {
+    pub post_id: String,
+    pub handle: String,
+    pub already_seen: bool,
+    pub is_stale: bool,
+    pub queued: bool,
+    pub symbol: Option<String>,
+    pub side: Option<String>,
+    pub confidence: Option<f64>,
+    pub reason: String,
+}
+
+/// Supervisor loop that checks config dynamically and manages the scanning cycle.
 pub async fn run(state: Arc<AppState>) {
-    let config = state.config.read().await.watch.clone();
-    if !config.enabled || config.handles.is_empty() {
-        info!("X watch loop is off");
+    info!("X Watch Loop supervisor started");
+    loop {
+        let config = state.config.read().await.watch.clone();
+        if !config.enabled || config.handles.is_empty() {
+            set_status(&state, |status| {
+                status.enabled = false;
+                status.running = false;
+                status.provider = config.provider.clone();
+                status.handles = config.handles.clone();
+                status.interval_secs = config.interval_secs;
+                status.last_result = "Watcher is paused or turned off".to_string();
+            })
+            .await;
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            continue;
+        }
+
+        let interval_secs = config.interval_secs.max(30);
         set_status(&state, |status| {
-            status.enabled = false;
-            status.running = false;
-            status.last_result = "Watcher is turned off".to_string();
+            status.enabled = true;
+            status.running = true;
+            status.provider = config.provider.clone();
+            status.handles = config.handles.clone();
+            status.interval_secs = interval_secs;
         })
         .await;
-        return;
-    }
-    let interval_secs = config.interval_secs.max(30);
-    set_status(&state, |status| {
-        status.enabled = true;
-        status.running = true;
-        status.handles = config.handles.clone();
-        status.interval_secs = interval_secs;
-        status.last_result = "Waiting for the first scan".to_string();
-        status.last_error = None;
-    })
-    .await;
-    info!(
-        "X watch loop started for {} every {interval_secs}s",
-        config.handles.join(", ")
-    );
 
-    let mut ticker = tokio::time::interval(Duration::from_secs(interval_secs));
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        ticker.tick().await;
+        if config.provider == "webhook" {
+            set_status(&state, |status| {
+                status.last_result = "Listening for incoming webhooks / external feed (0 polling fees)".to_string();
+                status.last_error = None;
+            })
+            .await;
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            continue;
+        }
+
+        // Active polling (scraper or grok mode)
         if let Err(error) = tick(&state, &config).await {
             warn!("X watch tick failed: {error}");
             let message = error.to_string();
@@ -83,49 +117,46 @@ pub async fn run(state: Arc<AppState>) {
             })
             .await;
         }
+
+        tokio::time::sleep(Duration::from_secs(interval_secs)).await;
     }
 }
 
+/// Run an immediate on-demand scan.
+pub async fn tick_now(state: &AppState) -> anyhow::Result<String> {
+    let config = state.config.read().await.watch.clone();
+    tick(state, &config).await?;
+    let status = state.watch_status.read().await.clone();
+    Ok(status.last_result)
+}
+
 async fn tick(state: &AppState, config: &WatchConfig) -> anyhow::Result<()> {
-    let from_date = Utc::now().format("%Y-%m-%d").to_string();
-    let handles = config.handles.join(", ");
-    let messages = vec![
-        ChatMessage {
-            role: "system".to_string(),
-            content: "You search X and return only posts those accounts published. Reply with JSON.".to_string(),
-        },
-        ChatMessage {
-            role: "user".to_string(),
-            content: format!(
-                "List posts from the last 15 minutes by these X accounts: {handles}. \
-                 Return JSON {{\"posts\":[{{\"id\":\"post id\",\"handle\":\"account\",\"text\":\"exact text\",\"created_at\":\"RFC3339 or empty\"}}]}}. \
-                 Use an empty posts array when there is nothing new. Do not invent posts."
-            ),
-        },
-    ];
-    let response = state
-        .ai_engine
-        .grok
-        .chat_x_accounts(messages, &config.handles, &from_date, 800)
-        .await?;
-    let body = json_object(&response.content).unwrap_or_else(|| json!({ "posts": [] }));
-    let posts = body.get("posts").and_then(|value| value.as_array()).cloned().unwrap_or_default();
+    let posts = match config.provider.as_str() {
+        "scraper" => fetch_posts_from_scraper(config).await?,
+        "grok" => fetch_posts_from_grok(state, config).await?,
+        _ => Vec::new(),
+    };
+
+    let found = posts.len();
     let mut queued = 0u32;
     for post in posts.iter().take(MAX_POSTS_PER_TICK) {
-        match consider_post(state, config, post).await {
-            Ok(true) => queued += 1,
-            Ok(false) => {}
-            Err(error) => warn!("X post skipped: {error}"),
+        match process_incoming_post(state, config, post).await {
+            Ok(result) => {
+                if result.queued {
+                    queued += 1;
+                }
+            }
+            Err(error) => warn!("X post processing skipped: {error}"),
         }
     }
-    let found = posts.len();
+
     set_status(state, |status| {
         status.last_tick_at = Some(Utc::now().to_rfc3339());
         status.last_error = None;
-        status.last_result = format!("{found} posts from X, {queued} queued for review");
+        status.last_result = format!("{found} posts scanned, {queued} queued for trade review");
     })
     .await;
-    info!("X watch tick: {found} posts, {queued} queued");
+    info!("X watch tick completed: {found} posts, {queued} queued");
     Ok(())
 }
 
@@ -134,36 +165,238 @@ async fn set_status(state: &AppState, update: impl FnOnce(&mut WatchStatus)) {
     update(&mut status);
 }
 
-async fn consider_post(state: &AppState, config: &WatchConfig, post: &Value) -> anyhow::Result<bool> {
-    let handle = post.get("handle").and_then(|value| value.as_str()).unwrap_or("").trim().trim_start_matches('@');
-    let text = post.get("text").and_then(|value| value.as_str()).unwrap_or("").trim();
-    if handle.is_empty() || text.is_empty() {
-        return Ok(false);
+/// Fetch posts using a lightweight third-party scraper API or custom JSON feed.
+async fn fetch_posts_from_scraper(config: &WatchConfig) -> anyhow::Result<Vec<IncomingPost>> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(12))
+        .build()?;
+    let mut all_posts = Vec::new();
+
+    for handle in &config.handles {
+        match config.scraper_provider.as_str() {
+            "twitterapi_io" => {
+                let url = format!(
+                    "https://api.twitterapi.io/twitter/user/last_tweets?userName={handle}"
+                );
+                let mut req = client.get(&url);
+                if !config.scraper_api_key.is_empty() {
+                    req = req.header("X-API-Key", &config.scraper_api_key);
+                }
+                if let Ok(resp) = req.send().await {
+                    if let Ok(body) = resp.json::<Value>().await {
+                        if let Some(tweets) = body.pointer("/data/tweets").and_then(|t| t.as_array()) {
+                            for t in tweets.iter().take(3) {
+                                let id = t.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let text = t.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let created_at = t.get("createdAt").and_then(|v| v.as_str()).map(str::to_string);
+                                if !text.is_empty() {
+                                    all_posts.push(IncomingPost {
+                                        handle: handle.clone(),
+                                        text,
+                                        id,
+                                        created_at,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            "rapidapi" => {
+                let url = format!(
+                    "https://twitter-api45.p.rapidapi.com/timeline.php?screenname={handle}"
+                );
+                let mut req = client.get(&url);
+                if !config.scraper_api_key.is_empty() {
+                    req = req
+                        .header("X-RapidAPI-Key", &config.scraper_api_key)
+                        .header("X-RapidAPI-Host", "twitter-api45.p.rapidapi.com");
+                }
+                if let Ok(resp) = req.send().await {
+                    if let Ok(body) = resp.json::<Value>().await {
+                        if let Some(timeline) = body.get("timeline").and_then(|t| t.as_array()) {
+                            for item in timeline.iter().take(3) {
+                                let id = item.get("tweet_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let created_at = item.get("created_at").and_then(|v| v.as_str()).map(str::to_string);
+                                if !text.is_empty() {
+                                    all_posts.push(IncomingPost {
+                                        handle: handle.clone(),
+                                        text,
+                                        id,
+                                        created_at,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            "custom" => {
+                if !config.custom_feed_url.is_empty() {
+                    let url = config.custom_feed_url.replace("{handle}", handle);
+                    if let Ok(resp) = client.get(&url).send().await {
+                        if let Ok(body) = resp.json::<Value>().await {
+                            if let Some(items) = body.get("posts").or_else(|| body.as_array().map(|_| &body)).and_then(|v| v.as_array()) {
+                                for item in items.iter().take(3) {
+                                    let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                    let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                    let created_at = item.get("created_at").and_then(|v| v.as_str()).map(str::to_string);
+                                    if !text.is_empty() {
+                                        all_posts.push(IncomingPost {
+                                            handle: handle.clone(),
+                                            text,
+                                            id,
+                                            created_at,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
     }
-    let raw_id = post.get("id").and_then(|value| value.as_str()).unwrap_or("");
-    let post_id = post_key(handle, raw_id, text);
-    if state.db.has_seen_post(&post_id).await? {
-        return Ok(false);
+    Ok(all_posts)
+}
+
+/// Fetch posts using Grok Search (Safe mode with low token cap).
+async fn fetch_posts_from_grok(state: &AppState, config: &WatchConfig) -> anyhow::Result<Vec<IncomingPost>> {
+    let from_date = Utc::now().format("%Y-%m-%d").to_string();
+    let handles = config.handles.join(", ");
+    let messages = vec![
+        ChatMessage {
+            role: "system".to_string(),
+            content: "You search X and return only posts those accounts published. Reply with compact JSON.".to_string(),
+        },
+        ChatMessage {
+            role: "user".to_string(),
+            content: format!(
+                "List latest posts by: {handles}. Return JSON {{\"posts\":[{{\"id\":\"...\",\"handle\":\"...\",\"text\":\"...\",\"created_at\":\"RFC3339\"}}]}}. Empty if none."
+            ),
+        },
+    ];
+
+    let response = state
+        .ai_engine
+        .grok
+        .chat_x_accounts(messages, &config.handles, &from_date, 300)
+        .await?;
+    let body = json_object(&response.content).unwrap_or_else(|| json!({ "posts": [] }));
+    let posts = body.get("posts").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+
+    let mut result = Vec::new();
+    for p in posts {
+        let handle = p.get("handle").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let text = p.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let id = p.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let created_at = p.get("created_at").and_then(|v| v.as_str()).map(str::to_string);
+        if !handle.is_empty() && !text.is_empty() {
+            result.push(IncomingPost {
+                handle,
+                text,
+                id,
+                created_at,
+            });
+        }
+    }
+    Ok(result)
+}
+
+/// Process an incoming post through the "Filter First, AI Second" architecture:
+/// 1. Handle & text validation
+/// 2. Post key deduplication ($0 LLM tokens spent if seen)
+/// 3. Staleness check ($0 LLM tokens spent if stale)
+/// 4. AI Reasoning (ONLY invoked when post is brand new and early!)
+/// 5. Market price extreme validation
+/// 6. Signal queueing
+pub async fn process_incoming_post(
+    state: &AppState,
+    config: &WatchConfig,
+    post: &IncomingPost,
+) -> anyhow::Result<IngestResult> {
+    let handle = post.handle.trim().trim_start_matches('@');
+    let text = post.text.trim();
+    if handle.is_empty() || text.is_empty() {
+        return Ok(IngestResult {
+            post_id: String::new(),
+            handle: handle.to_string(),
+            already_seen: false,
+            is_stale: false,
+            queued: false,
+            symbol: None,
+            side: None,
+            confidence: None,
+            reason: "Empty handle or text".to_string(),
+        });
     }
 
+    let post_id = post_key(handle, &post.id, text);
+
+    // STEP 1 (Filter First): Check if already seen in database
+    if state.db.has_seen_post(&post_id).await? {
+        return Ok(IngestResult {
+            post_id,
+            handle: handle.to_string(),
+            already_seen: true,
+            is_stale: false,
+            queued: false,
+            symbol: None,
+            side: None,
+            confidence: None,
+            reason: "Already seen in database".to_string(),
+        });
+    }
+
+    // STEP 2 (Filter First): Check post staleness
     let created_at = post
-        .get("created_at")
-        .and_then(|value| value.as_str())
-        .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
-        .map(|value| value.with_timezone(&Utc));
+        .created_at
+        .as_deref()
+        .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+        .map(|v| v.with_timezone(&Utc));
+
     if post_is_stale(created_at, Utc::now(), config.max_post_age_secs) {
         state.db.remember_post(&post_id, handle, text, false).await?;
         info!("X post from @{handle} is older than {}s; not queued", config.max_post_age_secs);
-        return Ok(false);
+        return Ok(IngestResult {
+            post_id,
+            handle: handle.to_string(),
+            already_seen: false,
+            is_stale: true,
+            queued: false,
+            symbol: None,
+            side: None,
+            confidence: None,
+            reason: format!("Post is older than {}s", config.max_post_age_secs),
+        });
     }
 
-    let decision = read_post(&state, handle, text).await?;
+    // STEP 3 (AI Second): Trigger LLM sentiment & symbol extraction ONLY now!
+    info!("🧠 Invoking AI reasoning for unseen post from @{handle} (key: {post_id})");
+    let decision = read_post(state, handle, text).await?;
+    info!(
+        "AI evaluation for @{handle}: trade={}, symbol={}, tilt={}, conf={:.2}, reason={}",
+        decision.trade, decision.symbol, decision.tilt, decision.confidence, decision.reason
+    );
+
     if !decision.trade || decision.confidence < config.min_confidence {
         state.db.remember_post(&post_id, handle, text, false).await?;
-        info!("X post from @{handle} is not a trade ({})", decision.reason);
-        return Ok(false);
+        return Ok(IngestResult {
+            post_id,
+            handle: handle.to_string(),
+            already_seen: false,
+            is_stale: false,
+            queued: false,
+            symbol: Some(decision.symbol),
+            side: Some(decision.side),
+            confidence: Some(decision.confidence),
+            reason: decision.reason,
+        });
     }
 
+    // STEP 4: Market Price & Trend validation
     let quote = fetch_quote(&decision.symbol).await;
     if let Some(quote) = quote {
         if move_already_done(&decision.side, quote.last, quote.high, quote.low) {
@@ -172,13 +405,34 @@ async fn consider_post(state: &AppState, config: &WatchConfig, post: &Value) -> 
                 "X post from @{handle} on {} is already at the day's extreme; not queued",
                 decision.symbol
             );
-            return Ok(false);
+            return Ok(IngestResult {
+                post_id,
+                handle: handle.to_string(),
+                already_seen: false,
+                is_stale: false,
+                queued: false,
+                symbol: Some(decision.symbol),
+                side: Some(decision.side),
+                confidence: Some(decision.confidence),
+                reason: "Market move already exhausted at day's extreme".to_string(),
+            });
         }
         queue_signal(state, handle, text, &post_id, &decision, Some(quote.last)).await?;
     } else {
         queue_signal(state, handle, text, &post_id, &decision, None).await?;
     }
-    Ok(true)
+
+    Ok(IngestResult {
+        post_id,
+        handle: handle.to_string(),
+        already_seen: false,
+        is_stale: false,
+        queued: true,
+        symbol: Some(decision.symbol),
+        side: Some(decision.side),
+        confidence: Some(decision.confidence),
+        reason: decision.reason,
+    })
 }
 
 async fn read_post(state: &AppState, handle: &str, text: &str) -> anyhow::Result<ReadDecision> {
@@ -203,7 +457,7 @@ async fn read_post(state: &AppState, handle: &str, text: &str) -> anyhow::Result
     let response = state
         .ai_engine
         .grok
-        .chat_json(messages, true, Some(0.1), Some(400), "low", None)
+        .chat_json(messages, true, Some(0.1), Some(300), "low", None)
         .await?;
     Ok(parse_decision(&response.content))
 }
@@ -234,7 +488,7 @@ async fn queue_signal(
             decision.tilt, decision.reason, text
         ),
     );
-    signal.position_size_pct = Some(config_size(&state).await.min(1.0));
+    signal.position_size_pct = Some(config_size(state).await.min(1.0));
     signal.expires_at = Some(Utc::now() + chrono::Duration::minutes(15));
     if let Some(price) = last_price.and_then(Decimal::from_f64_retain) {
         let (stop, target) = protective_levels(price, &decision.side, 2.0, 4.0);
@@ -274,16 +528,17 @@ struct Quote {
     low: f64,
 }
 
-struct ReadDecision {
-    trade: bool,
-    symbol: String,
-    tilt: String,
-    side: String,
-    confidence: f64,
-    reason: String,
+#[derive(Debug, Clone)]
+pub struct ReadDecision {
+    pub trade: bool,
+    pub symbol: String,
+    pub tilt: String,
+    pub side: String,
+    pub confidence: f64,
+    pub reason: String,
 }
 
-fn parse_decision(content: &str) -> ReadDecision {
+pub fn parse_decision(content: &str) -> ReadDecision {
     let empty = ReadDecision {
         trade: false,
         symbol: String::new(),

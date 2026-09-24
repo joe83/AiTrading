@@ -475,6 +475,25 @@ export const api = {
 
   getWatch: () => request<WatchSnapshot>('/api/watch'),
 
+  getWatchConfig: () => request<WatchConfig>('/api/watch/config'),
+
+  updateWatchConfig: (config: Partial<WatchConfig>) =>
+    request<{ status: string; config: WatchConfig }>('/api/watch/config', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    }),
+
+  triggerWatchScan: () =>
+    request<{ status: string; result: string }>('/api/watch/scan', {
+      method: 'POST',
+    }),
+
+  ingestWatchPost: (post: { handle: string; text: string; id?: string; created_at?: string }) =>
+    request<WatchIngestResult>('/api/watch/ingest', {
+      method: 'POST',
+      body: JSON.stringify(post),
+    }),
+
   getGrokAccount: () => request<GrokAccount>('/api/grok/account'),
 
   getGrokLogin: () => request<GrokLogin>('/api/grok/login'),
@@ -507,9 +526,35 @@ export interface LessonRecord {
   created_at: string;
 }
 
+export interface WatchConfig {
+  enabled: boolean;
+  interval_secs: number;
+  provider: 'webhook' | 'scraper' | 'grok' | string;
+  handles: string[];
+  min_confidence: number;
+  max_post_age_secs: number;
+  scraper_api_key?: string;
+  scraper_provider?: 'twitterapi_io' | 'rapidapi' | 'custom' | string;
+  custom_feed_url?: string;
+  webhook_secret?: string;
+}
+
+export interface WatchIngestResult {
+  post_id: string;
+  handle: string;
+  already_seen: boolean;
+  is_stale: boolean;
+  queued: boolean;
+  symbol?: string | null;
+  side?: string | null;
+  confidence?: number | null;
+  reason: string;
+}
+
 export interface WatchSnapshot {
   status: {
     enabled: boolean;
+    provider?: string;
     handles: string[];
     interval_secs: number;
     running: boolean;

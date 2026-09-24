@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::env;
 
 /// Application configuration loaded from environment variables.
@@ -110,15 +111,25 @@ pub struct TradingConfig {
     pub sentiment_check_interval_secs: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatchConfig {
     pub enabled: bool,
     pub interval_secs: u64,
+    /// Ingestion provider: "webhook" | "scraper" | "grok"
+    pub provider: String,
     /// X handles without the @ sign.
     pub handles: Vec<String>,
     pub min_confidence: f64,
     /// Posts older than this are marked seen and not queued.
     pub max_post_age_secs: i64,
+    /// Optional RapidAPI or TwitterAPI.io key
+    pub scraper_api_key: String,
+    /// Optional scraper provider: "twitterapi_io" | "rapidapi" | "custom"
+    pub scraper_provider: String,
+    /// Optional custom feed URL (supports {handle})
+    pub custom_feed_url: String,
+    /// Webhook secret token for POST /api/watch/ingest (optional auth)
+    pub webhook_secret: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -229,9 +240,10 @@ impl AppConfig {
             },
             watch: WatchConfig {
                 enabled: env_var_or("WATCH_ENABLED", "true") != "false",
-                interval_secs: env_var_or("WATCH_INTERVAL_SECS", "60")
+                interval_secs: env_var_or("WATCH_INTERVAL_SECS", "300")
                     .parse()
                     .context("Invalid WATCH_INTERVAL_SECS")?,
+                provider: env_var_or("WATCH_PROVIDER", "webhook"),
                 handles: env_var_or("WATCH_HANDLES", "elonmusk,realDonaldTrump")
                     .split(',')
                     .map(|handle| handle.trim().trim_start_matches('@').to_string())
@@ -244,6 +256,10 @@ impl AppConfig {
                 max_post_age_secs: env_var_or("WATCH_MAX_POST_AGE_SECS", "600")
                     .parse()
                     .context("Invalid WATCH_MAX_POST_AGE_SECS")?,
+                scraper_api_key: env_var_or("WATCH_SCRAPER_API_KEY", ""),
+                scraper_provider: env_var_or("WATCH_SCRAPER_PROVIDER", "twitterapi_io"),
+                custom_feed_url: env_var_or("WATCH_CUSTOM_FEED_URL", ""),
+                webhook_secret: env_var_or("WATCH_WEBHOOK_SECRET", ""),
             },
         })
     }

@@ -1,6 +1,7 @@
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::Json;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -47,6 +48,108 @@ pub async fn watch_status(State(state): State<Arc<AppState>>) -> Result<Json<Val
             "seen_at": post.seen_at,
         })).collect::<Vec<_>>(),
     })))
+}
+
+pub async fn get_watch_config(State(state): State<Arc<AppState>>) -> Json<Value> {
+    let config = state.config.read().await.watch.clone();
+    Json(serde_json::to_value(&config).unwrap_or(json!({})))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateWatchConfigRequest {
+    pub enabled: Option<bool>,
+    pub interval_secs: Option<u64>,
+    pub provider: Option<String>,
+    pub handles: Option<Vec<String>>,
+    pub min_confidence: Option<f64>,
+    pub max_post_age_secs: Option<i64>,
+    pub scraper_api_key: Option<String>,
+    pub scraper_provider: Option<String>,
+    pub custom_feed_url: Option<String>,
+    pub webhook_secret: Option<String>,
+}
+
+pub async fn update_watch_config(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<UpdateWatchConfigRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let mut config = state.config.write().await;
+    if let Some(enabled) = payload.enabled {
+        config.watch.enabled = enabled;
+    }
+    if let Some(interval) = payload.interval_secs {
+        config.watch.interval_secs = interval.max(30);
+    }
+    if let Some(provider) = payload.provider {
+        config.watch.provider = provider;
+    }
+    if let Some(handles) = payload.handles {
+        config.watch.handles = handles
+            .into_iter()
+            .map(|h| h.trim().trim_start_matches('@').to_string())
+            .filter(|h| !h.is_empty())
+            .take(20)
+            .collect();
+    }
+    if let Some(confidence) = payload.min_confidence {
+        config.watch.min_confidence = confidence.clamp(0.1, 1.0);
+    }
+    if let Some(max_age) = payload.max_post_age_secs {
+        config.watch.max_post_age_secs = max_age.max(60);
+    }
+    if let Some(key) = payload.scraper_api_key {
+        config.watch.scraper_api_key = key;
+    }
+    if let Some(scraper_provider) = payload.scraper_provider {
+        config.watch.scraper_provider = scraper_provider;
+    }
+    if let Some(feed_url) = payload.custom_feed_url {
+        config.watch.custom_feed_url = feed_url;
+    }
+    if let Some(secret) = payload.webhook_secret {
+        config.watch.webhook_secret = secret;
+    }
+
+    let updated_watch = config.watch.clone();
+    drop(config);
+
+    // Update watch status to reflect immediately
+    {
+        let mut status = state.watch_status.write().await;
+        status.enabled = updated_watch.enabled;
+        status.provider = updated_watch.provider.clone();
+        status.handles = updated_watch.handles.clone();
+        status.interval_secs = updated_watch.interval_secs;
+    }
+
+    Ok(Json(json!({
+        "status": "ok",
+        "config": updated_watch,
+    })))
+}
+
+pub async fn watch_scan(State(state): State<Arc<AppState>>) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    match crate::ai::watch_loop::tick_now(&state).await {
+        Ok(result) => Ok(Json(json!({ "status": "ok", "result": result }))),
+        Err(error) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "status": "error", "error": error.to_string() })),
+        )),
+    }
+}
+
+pub async fn watch_ingest(
+    State(state): State<Arc<AppState>>,
+    Json(post): Json<crate::ai::watch_loop::IncomingPost>,
+) -> Result<Json<crate::ai::watch_loop::IngestResult>, (StatusCode, Json<Value>)> {
+    let config = state.config.read().await.watch.clone();
+    match crate::ai::watch_loop::process_incoming_post(&state, &config, &post).await {
+        Ok(result) => Ok(Json(result)),
+        Err(error) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "status": "error", "error": error.to_string() })),
+        )),
+    }
 }
 
 pub async fn grok_account(State(_state): State<Arc<AppState>>) -> Json<Value> {
