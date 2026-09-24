@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod conductor;
 pub mod grok_client;
 pub mod watch_loop;
 pub mod technical_analysis;

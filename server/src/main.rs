@@ -45,6 +45,8 @@ pub struct AppState {
     pub signal_history: RwLock<Vec<TradingSignal>>,
     /// Latest X watcher status for the dashboard.
     pub watch_status: RwLock<crate::ai::watch_loop::WatchStatus>,
+    /// Latest conductor pass for the dashboard.
+    pub conductor_status: RwLock<crate::ai::conductor::ConductorStatus>,
     /// Backtest results history.
     pub backtest_results: RwLock<Vec<BacktestResult>>,
     /// Server start time.
@@ -157,6 +159,7 @@ async fn main() -> Result<()> {
         latest_analyses: RwLock::new(HashMap::new()),
         signal_history: RwLock::new(Vec::new()),
         watch_status: RwLock::new(crate::ai::watch_loop::WatchStatus::default()),
+        conductor_status: RwLock::new(crate::ai::conductor::ConductorStatus::default()),
         backtest_results: RwLock::new(Vec::new()),
         start_time: Instant::now(),
     });
@@ -202,6 +205,10 @@ async fn main() -> Result<()> {
     let watch_handle = tokio::spawn(async move {
         crate::ai::watch_loop::run(watch_state).await;
     });
+    let conductor_state = state.clone();
+    let conductor_handle = tokio::spawn(async move {
+        crate::ai::conductor::run(conductor_state).await;
+    });
 
     // Wait for shutdown signal
     tokio::signal::ctrl_c().await?;
@@ -209,6 +216,7 @@ async fn main() -> Result<()> {
 
     // Graceful shutdown
     watch_handle.abort();
+    conductor_handle.abort();
     api_handle.abort();
     ws_handle.abort();
 

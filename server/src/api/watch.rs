@@ -28,6 +28,7 @@ fn control_url() -> String {
 
 pub async fn watch_status(State(state): State<Arc<AppState>>) -> Result<Json<Value>, StatusCode> {
     let status = state.watch_status.read().await.clone();
+    let conductor = state.conductor_status.read().await.clone();
     let posts = match state.db.recent_watched_posts(30).await {
         Ok(posts) => posts,
         Err(error) => {
@@ -37,6 +38,7 @@ pub async fn watch_status(State(state): State<Arc<AppState>>) -> Result<Json<Val
     };
     Ok(Json(json!({
         "status": status,
+        "conductor": conductor,
         "posts": posts.into_iter().map(|post| json!({
             "post_id": post.post_id,
             "handle": post.handle,

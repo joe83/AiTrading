@@ -480,7 +480,22 @@ export const api = {
   getGrokLogin: () => request<GrokLogin>('/api/grok/login'),
 
   startGrokLogin: () => request<GrokLogin>('/api/grok/login', { method: 'POST' }),
+
+  // Market Candlesticks
+  getMarketCandles: (symbol: string, timeframe = '1h', limit = 200) =>
+    request<CandleData[]>(
+      `/api/market/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=${limit}`,
+    ),
 };
+
+export interface CandleData {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
 
 export interface LessonRecord {
   id: string;
@@ -499,6 +514,12 @@ export interface WatchSnapshot {
     interval_secs: number;
     running: boolean;
     last_tick_at: string | null;
+    last_result: string;
+    last_error: string | null;
+  };
+  conductor?: {
+    running: boolean;
+    last_run_at: string | null;
     last_result: string;
     last_error: string | null;
   };

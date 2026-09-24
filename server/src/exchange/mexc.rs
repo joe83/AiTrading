@@ -287,14 +287,14 @@ impl MexcExchange {
     /// Convert MEXC interval string to timeframe.
     fn timeframe_to_interval(tf: &Timeframe) -> &'static str {
         match tf {
-            Timeframe::Min1 => "Min1",
-            Timeframe::Min5 => "Min5",
-            Timeframe::Min15 => "Min15",
-            Timeframe::Min30 => "Min30",
-            Timeframe::Hour1 => "Min60",
-            Timeframe::Hour4 => "Hour4",
-            Timeframe::Day1 => "Day1",
-            Timeframe::Week1 => "Week1",
+            Timeframe::Min1 => "1m",
+            Timeframe::Min5 => "5m",
+            Timeframe::Min15 => "15m",
+            Timeframe::Min30 => "30m",
+            Timeframe::Hour1 => "60m",
+            Timeframe::Hour4 => "4h",
+            Timeframe::Day1 => "1d",
+            Timeframe::Week1 => "1W",
         }
     }
 }

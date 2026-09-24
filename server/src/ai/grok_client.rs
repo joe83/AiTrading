@@ -326,6 +326,25 @@ impl GrokClient {
         reasoning_effort: &str,
         live_search_results: Option<u32>,
     ) -> Result<GrokResponse> {
+        if live_search_results.is_some() {
+            let model = if use_primary_model {
+                self.get_model_primary()
+            } else {
+                self.get_model_fast()
+            };
+            return self
+                .responses_json(
+                    model,
+                    messages,
+                    reasoning_effort,
+                    max_completion_tokens.unwrap_or(1024),
+                    serde_json::json!([
+                        { "type": "web_search" },
+                        { "type": "x_search" }
+                    ]),
+                )
+                .await;
+        }
         let request = self.build_request(
             messages,
             use_primary_model,
@@ -350,20 +369,38 @@ impl GrokClient {
         from_date: &str,
         max_completion_tokens: u32,
     ) -> Result<GrokResponse> {
+        self.responses_json(
+            self.get_model_fast(),
+            messages,
+            "low",
+            max_completion_tokens,
+            serde_json::json!([{
+                "type": "x_search",
+                "allowed_x_handles": handles,
+                "from_date": from_date,
+            }]),
+        )
+        .await
+    }
+
+    async fn responses_json(
+        &self,
+        model: String,
+        messages: Vec<ChatMessage>,
+        reasoning_effort: &str,
+        max_output_tokens: u32,
+        tools: serde_json::Value,
+    ) -> Result<GrokResponse> {
         let body = serde_json::json!({
-            "model": self.get_model_fast(),
+            "model": model,
             "input": messages.iter().map(|message| serde_json::json!({
                 "role": message.role,
                 "content": message.content,
             })).collect::<Vec<_>>(),
-            "reasoning": { "effort": "low" },
-            "max_output_tokens": max_completion_tokens,
+            "reasoning": { "effort": reasoning_effort },
+            "max_output_tokens": max_output_tokens,
             "text": { "format": { "type": "json_object" } },
-            "tools": [{
-                "type": "x_search",
-                "allowed_x_handles": handles,
-                "from_date": from_date,
-            }]
+            "tools": tools,
         });
         self.post_responses(&body).await
     }
@@ -515,6 +552,11 @@ impl GrokClient {
         if !status.is_success() {
             let error_body = response.text().await.unwrap_or_default();
             error!("Grok API error ({}): {}", status, error_body);
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&error_body) {
+                if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
+                    anyhow::bail!("Grok API error ({}): {}", status, err);
+                }
+            }
             anyhow::bail!("Grok API returned error {}: {}", status, error_body);
         }
 
@@ -559,6 +601,48 @@ impl GrokClient {
             anyhow::bail!("API key is empty or not configured");
         }
 
+        let base_url = self.get_base_url();
+
+        // 1. Probe GET /models to verify credentials and endpoint reachability
+        let models_url = format!("{}/models", base_url.trim_end_matches('/'));
+        let models_res = self
+            .http_client
+            .get(&models_url)
+            .header("Authorization", format!("Bearer {}", key))
+            .send()
+            .await;
+
+        match models_res {
+            Ok(res) => {
+                let status = res.status();
+                if status == reqwest::StatusCode::UNAUTHORIZED {
+                    anyhow::bail!("Invalid Grok API Key (HTTP 401). Please verify your key at console.x.ai");
+                }
+                if status == reqwest::StatusCode::FORBIDDEN {
+                    let body = res.text().await.unwrap_or_default();
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
+                        if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
+                            anyhow::bail!("xAI account error: {err}");
+                        }
+                    }
+                    anyhow::bail!("Access forbidden (HTTP 403): Your xAI team has either used all available credits or reached its monthly spending limit. Please add prepaid credits at console.x.ai.");
+                }
+                if !status.is_success() {
+                    let body = res.text().await.unwrap_or_default();
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
+                        if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
+                            anyhow::bail!("xAI error ({}): {}", status, err);
+                        }
+                    }
+                    anyhow::bail!("Grok API returned HTTP {status}: {body}");
+                }
+            }
+            Err(e) => {
+                anyhow::bail!("Failed to reach Grok API endpoint at {base_url}: {e}");
+            }
+        }
+
+        // 2. Perform a lightweight test completion
         let request = self.build_request(
             vec![ChatMessage {
                 role: "user".to_string(),
@@ -573,22 +657,27 @@ impl GrokClient {
             None,
         );
 
-        let response = self
-            .send_request(request, Some(&key))
-            .await
-            .context("Failed to reach Grok API endpoint")?;
-
-        if response.content.trim().is_empty() {
-            anyhow::bail!(
-                "Grok API returned an empty completion (finish_reason={})",
-                response.finish_reason
-            );
+        match self.send_request(request, Some(&key)).await {
+            Ok(response) => {
+                if response.content.trim().is_empty() {
+                    anyhow::bail!(
+                        "Grok API returned an empty completion (finish_reason={})",
+                        response.finish_reason
+                    );
+                }
+                Ok(format!(
+                    "Connection successful! Grok API verified (model: {}).",
+                    response.model
+                ))
+            }
+            Err(e) => {
+                let err_msg = format!("{:#}", e);
+                if err_msg.contains("spending limit") || err_msg.contains("credits") {
+                    anyhow::bail!("API key is authentic, but your xAI account has $0 balance or reached monthly spending limit: {err_msg}");
+                }
+                anyhow::bail!("{err_msg}");
+            }
         }
-
-        Ok(format!(
-            "Connection successful! Grok API verified ({}).",
-            response.model
-        ))
     }
 
     /// Get total tokens used across all API calls.

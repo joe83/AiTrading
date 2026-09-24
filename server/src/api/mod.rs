@@ -7,7 +7,7 @@ pub mod websocket;
 use crate::backtest::{BacktestConfig, BacktestEngine};
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     middleware,
     response::Json,
@@ -36,6 +36,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let public_routes = Router::new()
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/verify", get(auth::verify_token))
+        .route("/api/market/candles", get(get_market_candles))
         .route("/api/health", get(health_check));
 
     // Protected routes — JWT authentication required
@@ -175,15 +176,51 @@ async fn get_pending_signals(State(state): State<Arc<AppState>>) -> Json<serde_j
 }
 
 async fn approve_signal(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let signal_id: uuid::Uuid = id.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
-
-    // TODO: In production, determine exchange from signal and call:
-    // state.execution_engine.approve_signal(signal_id, &*exchange).await;
-
-    Ok(Json(serde_json::json!({ "status": "approved", "signal_id": signal_id })))
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let signal_id: uuid::Uuid = id.parse().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid signal id" })),
+        )
+    })?;
+    let pending = state.execution_engine.get_pending_signals().await;
+    let Some(signal) = pending.into_iter().find(|item| item.id == signal_id) else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "signal is not pending" })),
+        ));
+    };
+    let Some(exchange) = state.exchange_manager.get(&signal.exchange).await else {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": format!("{} is not connected", signal.exchange),
+            })),
+        ));
+    };
+    let locked = exchange.read().await;
+    match state
+        .execution_engine
+        .approve_signal(signal_id, locked.as_ref())
+        .await
+    {
+        Ok(Some(trade)) => Ok(Json(serde_json::json!({
+            "status": "executed",
+            "signal_id": signal_id,
+            "trade_id": trade.id,
+            "symbol": trade.symbol,
+        }))),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "signal is not pending" })),
+        )),
+        Err(error) => Err((
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )),
+    }
 }
 
 async fn reject_signal(
@@ -1078,7 +1115,7 @@ async fn test_api_key(
                 }),
                 Err(e) => Json(TestApiKeyResponse {
                     success: false,
-                    message: format!("Grok test failed: {e}"),
+                    message: format!("Grok test failed: {e:#}"),
                 }),
             }
         }
@@ -1364,4 +1401,91 @@ async fn scan_meme_radar(State(state): State<Arc<AppState>>) -> (StatusCode, Jso
         ),
     }
 }
+
+#[derive(Debug, Deserialize)]
+pub struct MarketCandlesQuery {
+    pub symbol: String,
+    pub timeframe: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MarketCandleDto {
+    pub time: i64,
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub volume: f64,
+}
+
+/// Fetch live candlestick data from exchange (MEXC public API) for charts.
+async fn get_market_candles(
+    Query(query): Query<MarketCandlesQuery>,
+) -> Result<Json<Vec<MarketCandleDto>>, StatusCode> {
+    let symbol = query.symbol.trim().to_uppercase();
+    let limit = query.limit.unwrap_or(200).min(1000);
+    let tf_str = query.timeframe.unwrap_or_else(|| "1h".to_string());
+
+    let interval = match tf_str.to_lowercase().as_str() {
+        "1m" => "1m",
+        "5m" => "5m",
+        "15m" => "15m",
+        "30m" => "30m",
+        "1h" | "60m" => "60m",
+        "4h" => "4h",
+        "1d" => "1d",
+        "1w" => "1W",
+        _ => "60m",
+    };
+
+    let client = reqwest::Client::new();
+    let url = format!(
+        "https://api.mexc.com/api/v3/klines?symbol={}&interval={}&limit={}",
+        symbol, interval, limit
+    );
+
+    let res = client.get(&url).send().await.map_err(|e| {
+        tracing::warn!("Failed to query MEXC klines: {e}");
+        StatusCode::BAD_GATEWAY
+    })?;
+
+    if !res.status().is_success() {
+        tracing::warn!("MEXC klines returned status {}", res.status());
+        return Err(StatusCode::BAD_GATEWAY);
+    }
+
+    let arr = res
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let klines = arr.as_array().ok_or(StatusCode::BAD_GATEWAY)?;
+
+    let mut dtos = Vec::with_capacity(klines.len());
+    for item in klines {
+        if let Some(entry) = item.as_array() {
+            if entry.len() >= 6 {
+                let open_time_ms = entry[0].as_i64().unwrap_or(0);
+                let time_sec = open_time_ms / 1000;
+                let open = entry[1].as_str().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                let high = entry[2].as_str().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                let low = entry[3].as_str().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                let close = entry[4].as_str().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                let volume = entry[5].as_str().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+
+                dtos.push(MarketCandleDto {
+                    time: time_sec,
+                    open,
+                    high,
+                    low,
+                    close,
+                    volume,
+                });
+            }
+        }
+    }
+
+    Ok(Json(dtos))
+}
+
 

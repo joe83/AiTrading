@@ -66,9 +66,11 @@
 
 .charts-page__info {
   display: flex;
+  align-items: center;
   gap: var(--space-6);
   padding: var(--space-3) 0;
   margin-top: var(--space-3);
+  flex-wrap: wrap;
 }
 
 .charts-page__info-item {
@@ -80,3 +82,34 @@
 .charts-page__info-item .label {
   margin-bottom: 0;
 }
+
+.charts-page__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.charts-page__badge--live {
+  background: rgba(0, 230, 118, 0.12);
+  color: #00e676;
+  border: 1px solid rgba(0, 230, 118, 0.25);
+}
+
+.charts-page__badge--demo {
+  background: rgba(255, 171, 0, 0.12);
+  color: #ffab00;
+  border: 1px solid rgba(255, 171, 0, 0.25);
+}
+
+.charts-page__pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+}
+

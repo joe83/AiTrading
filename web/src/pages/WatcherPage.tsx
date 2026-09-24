@@ -63,6 +63,13 @@ export function WatcherPage() {
           <p className="text-muted">Last scan {new Date(status.last_tick_at).toLocaleString()}</p>
         )}
         {status?.last_error && <p className="watcher-page__error">{status.last_error}</p>}
+        {watch?.conductor && (
+          <p className="text-muted">
+            Conductor {watch.conductor.running ? 'running' : 'stopped'}
+            {watch.conductor.last_result ? ` · ${watch.conductor.last_result}` : ''}
+          </p>
+        )}
+        {watch?.conductor?.last_error && <p className="watcher-page__error">{watch.conductor.last_error}</p>}
       </section>
 
       <section className="signals-page__section">
