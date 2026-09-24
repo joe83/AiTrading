@@ -1121,7 +1121,7 @@ async fn test_api_key(
         }
         "mexc" => {
             let key = req.key.filter(|s| !s.trim().is_empty());
-            let (test_key, _test_secret) = if let Some(k) = key {
+            let (test_key, test_secret) = if let Some(k) = key {
                 (k, req.secret.unwrap_or_default())
             } else {
                 let cfg = state.config.read().await;
@@ -1136,21 +1136,68 @@ async fn test_api_key(
             }
 
             let client = reqwest::Client::new();
-            match client.get("https://api.mexc.com/api/v3/time").send().await {
-                Ok(res) if res.status().is_success() => {
-                    Json(TestApiKeyResponse {
-                        success: true,
-                        message: "MEXC API endpoint reachable and active. Credentials formatted.".to_string(),
-                    })
+            if test_secret.trim().is_empty() {
+                match client.get("https://api.mexc.com/api/v3/time").send().await {
+                    Ok(res) if res.status().is_success() => {
+                        Json(TestApiKeyResponse {
+                            success: true,
+                            message: "MEXC endpoint reachable. Please also provide Secret Key to verify full account authentication.".to_string(),
+                        })
+                    }
+                    Ok(res) => Json(TestApiKeyResponse {
+                        success: false,
+                        message: format!("MEXC responded with HTTP {}", res.status()),
+                    }),
+                    Err(e) => Json(TestApiKeyResponse {
+                        success: false,
+                        message: format!("Failed to reach MEXC: {e}"),
+                    }),
                 }
-                Ok(res) => Json(TestApiKeyResponse {
-                    success: false,
-                    message: format!("MEXC responded with HTTP {}", res.status()),
-                }),
-                Err(e) => Json(TestApiKeyResponse {
-                    success: false,
-                    message: format!("Failed to reach MEXC: {e}"),
-                }),
+            } else {
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                let query = format!("timestamp={now_ms}");
+                let mut mac = match hmac::Hmac::<sha2::Sha256>::new_from_slice(test_secret.trim().as_bytes()) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        return Json(TestApiKeyResponse {
+                            success: false,
+                            message: format!("Invalid secret key format: {e}"),
+                        });
+                    }
+                };
+                mac.update(query.as_bytes());
+                let signature = hex::encode(mac.finalize().into_bytes());
+
+                let url = format!("https://api.mexc.com/api/v3/account?{query}&signature={signature}");
+                match client.get(&url).header("X-MEXC-APIKEY", test_key.trim()).send().await {
+                    Ok(res) => {
+                        let status = res.status();
+                        let body = res.text().await.unwrap_or_default();
+                        if status.is_success() {
+                            Json(TestApiKeyResponse {
+                                success: true,
+                                message: "MEXC API credentials verified successfully! Account connected.".to_string(),
+                            })
+                        } else {
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
+                                if let Some(msg) = v.get("msg").and_then(|m| m.as_str()) {
+                                    return Json(TestApiKeyResponse {
+                                        success: false,
+                                        message: format!("MEXC authentication rejected (HTTP {status}): {msg}"),
+                                    });
+                                }
+                            }
+                            Json(TestApiKeyResponse {
+                                success: false,
+                                message: format!("MEXC authentication failed (HTTP {status}): {body}"),
+                            })
+                        }
+                    }
+                    Err(e) => Json(TestApiKeyResponse {
+                        success: false,
+                        message: format!("Failed to connect to MEXC: {e}"),
+                    }),
+                }
             }
         }
         "alpaca" => {

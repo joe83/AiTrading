@@ -74,13 +74,13 @@ export type WsMessage =
 type WsListener = (msg: WsMessage) => void;
 
 function getDefaultWsUrl(): string {
+  if (typeof window !== 'undefined' && (import.meta.env.PROD || !import.meta.env.VITE_WS_URL)) {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${protocol}//${window.location.host}/ws`;
+  }
   if (import.meta.env.VITE_WS_URL) {
     const url = import.meta.env.VITE_WS_URL;
     return url.endsWith('/ws') ? url : `${url}/ws`;
-  }
-  if (typeof window !== 'undefined') {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${protocol}//${window.location.host}/ws`;
   }
   return 'ws://localhost:8081/ws';
 }

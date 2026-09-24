@@ -2,7 +2,7 @@
 // REST API Client — Type-safe wrapper for all Rust server endpoints
 // ===========================================================================
 
-const API_BASE = import.meta.env.VITE_API_URL ?? '';
+const API_BASE = import.meta.env.PROD ? '' : (import.meta.env.VITE_API_URL ?? '');
 
 // ---------------------------------------------------------------------------
 // Types matching Rust server responses
