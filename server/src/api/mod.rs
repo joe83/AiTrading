@@ -37,7 +37,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/verify", get(auth::verify_token))
         .route("/api/market/candles", get(get_market_candles))
-        .route("/api/watch/ingest", post(watch::watch_ingest))
+        .route("/api/watch/ingest", post(watch::watch_ingest).get(watch::watch_ingest_info))
         .route("/api/health", get(health_check));
 
     // Protected routes — JWT authentication required

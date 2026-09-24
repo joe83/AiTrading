@@ -152,6 +152,22 @@ pub async fn watch_ingest(
     }
 }
 
+pub async fn watch_ingest_info() -> Json<Value> {
+    Json(json!({
+        "endpoint": "/api/watch/ingest",
+        "description": "Webhook receiver for incoming X (Twitter) posts in the Filter First, AI Second architecture.",
+        "accepted_method": "POST",
+        "content_type": "application/json",
+        "example_payload": {
+            "handle": "elonmusk",
+            "text": "Tesla robotaxi fleet expanding to Austin next month",
+            "id": "optional_tweet_id",
+            "created_at": "2026-09-24T18:00:00Z"
+        },
+        "note": "To test interactively, use the 'Test Tweet Ingest & Reasoning' form on the /watcher page."
+    }))
+}
+
 pub async fn grok_account(State(_state): State<Arc<AppState>>) -> Json<Value> {
     match control_get("/account").await {
         Ok(value) => Json(value),
